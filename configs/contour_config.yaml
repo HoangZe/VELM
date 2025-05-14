@@ -1,0 +1,72 @@
+# Configuration for contour visualization script
+
+# Dataset to process: 'mvtec_ad', 'mvtec_ac', or 'visa_ac'
+dataset: 'mvtec_ac'
+
+# Image size for resizing
+image_size: 448
+
+# Dataset-specific configurations
+mvtec_ad:
+  heatmap_dir: 'datasets/mvtec_ad'
+  image_dir: 'datasets/mvtec_ad'
+  save_dir: './contour_gt_mvtec_ad'
+  categories:
+    - 'bottle'
+    - 'cable'
+    - 'capsule'
+    - 'carpet'
+    - 'grid'
+    - 'hazelnut'
+    - 'leather'
+    - 'metal_nut'
+    - 'pill'
+    - 'screw'
+    - 'tile'
+    - 'toothbrush'
+    - 'transistor'
+    - 'wood'
+    - 'zipper'
+
+mvtec_ac:
+  heatmap_dir: 'datasets/mvtec_ac'
+  image_dir: 'datasets/mvtec_ac'
+  save_dir: './contour_gt_mvtec_ac'
+  categories:
+    - 'bottle'
+    - 'cable'
+    - 'capsule'
+    - 'carpet'
+    - 'grid'
+    - 'hazelnut'
+    - 'leather'
+    - 'metal_nut'
+    - 'pill'
+    - 'screw'
+    - 'tile'
+    - 'transistor'
+    - 'wood'
+    - 'zipper'
+
+visa_ac:
+  heatmap_dir: 'datasets/visa_ac'
+  image_dir: 'datasets/visa_ac'
+  save_dir: './contour_gt_visa_ac'
+  categories:
+    - 'candle'
+    - 'capsules'
+    - 'cashew'
+    - 'chewinggum'
+    - 'fryum'
+    - 'macaroni1'
+    - 'macaroni2'
+    - 'pcb1'
+    - 'pcb2'
+    - 'pcb3'
+    - 'pcb4'
+    - 'pipe_fryum'
+
+# Logging configuration
+logging:
+  level: 'INFO'
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s' 

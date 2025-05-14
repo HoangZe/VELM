@@ -1,0 +1,89 @@
+{
+    "candle": {
+        "normal": ["are round with a smooth, flat surface and have centered, unlit wicks. They appear uniformly white and are housed in circular metal containers. Follow this strict hierarchy for classification: First check for color contamination. If there is a redish spot, the defect is red spot. If it is distributed darker colors distributed in portion of wax, the defect is contamination. If there is no color change, check the location of anomaly for missing wax. If it is not exactly at the edge it is surface pitting. If it is at the edge it is either edge chipping or surface smearing. If it appears as a thin, elongated cut or notch, resembling a small slit in the wax surface it is edge chipping, if it appears as a small, rounded indentation or cavity, creating a slight depression in the wax surface it is surface smearing"],
+        "chunk-of-wax-missing": ["surface pitting", "presence of small holes or pits on any part of the candle's surface, excluding the edges"],
+        "damaged-corner-of-packaging": ["edge chipping", "small chips or pits located specifically along the edges of the candle"],
+        "different-colour-spot": ["red spot", "presence of visible stains or discolorations on the surface of the candle, as indicated by red spots or marks that deviate from the uniform color"],
+        "foreign-particals-on-candle": ["contamination", "presence of foreign particles or debris embedded on the surface of the candle, which may appear as dirt or specks disrupting the smooth texture"],
+        "wax-melded-out-of-the-candle": ["surface smearing", "irregular smears or deformations on the surface of the candle, particularly evident by streaks or uneven texture"]
+    },
+    "capsules": {
+        "normal": ["smooth, uniform surface, free of any air bubbles, dark spots, scratches, or deformations. The capsules exhibit consistent coloring and are correctly shaped. Follow this strict hierarchy for classificatiomn: First check for leakage of encapsulated material, punctures, squeezing or structural deformities, indcating the defect class deformed. If you did not found leaking or deformities, then check for scratch on the capsule surface, if you found it, the defect class is scratch. If not, then check for a dark spot, if you found it, the defect class is dark spot. If neither applies, then check for bubble, indicating the defect bubble"],
+        "bubble": ["bubble", "presence of air bubble within the capsule"],
+        "bubble-discolor": ["dark spot", "presence of a dark spot in one capsule"],
+        "bubble-discolor-scratch": ["scratch", "presence of a scratch marks on the surface of one of the capsules"],
+        "bubble-discolor-scratch-leak": ["deformed", "presence of leakage of encapsulated material or punctures, squeezing, or structural deformities in a capsule"]
+    },
+    "cashew": {
+        "normal": ["a smooth, crescent-shaped surface with a uniform beige color and no visible irregularities or damage. It displays a consistent texture and retains its characteristic curved form without any marks or defects. Follow this strict hierarchy for defect classification: If there is a color change, it is either dark mark or color spot. If the spot is darker, it is a dark mark. If the spot is slightly lighter but close to the nuts color, it is a color spot. If there is no color change, check the defects location. If part of the edge is missing, it is edge break. If there are fine lines on the surface, it is surface scratch. If none of these apply and there is a small hole, it is pinhole"],
+        "burnt": ["dark mark", "slightly darker or blackened spot on the surface of the cashew"],
+        "same-colour-spot": ["color spot", "a small, subtle patch on the cashew that is slightly different in color but blends closely with the natural hue"],
+        "corner-or-edge-breakage": ["edge break", "section of the cashew nut's edge is visibly missing or chipped off"],
+        "small-hole": ["pinhole", "a small, pretty deep, circular hole can be seen, piercing through the nut"],
+        "small-scratches": ["surface scratches", "tiny, fine lines or scratches that don't penetrate deeply but may be challenging to observe against the beige background"]
+    },
+    "chewinggum": {
+        "normal": ["has a smooth, even surface with uniform edges and corners. It exhibits a consistent color and texture throughout, with no visible cracks, chunks missing, or discolorations. The overall appearance is polished and symmetrical"],
+        "chunk-of-gum-missing": ["missing chunk", "noticeable indentation or cavity in the middle of the chewing gum, leading to an uneven texture"],
+        "chunk-of-gum-missing_small-cracks": ["cracked chunk", "combination of a chunk missing and several fine cracks radiating from the missing part"],
+        "corner-missing": ["corner missing", "small section missing from one of the corners, giving the gum an irregular corner shape"],
+        "similar-colour-spot": ["spot", "small, subtle spot on the gum's surface, with a slightly different texture or color, making it look like a minor blemish"]
+    },
+    "fryum":{
+        "normal": ["A perfect fryum with no visible irregularities, breakages, or color spots, maintaining its intended uniform shape and color. Follow this strict hierarchy for defect classification: If the anomaly covers most of the fryum, it is stuck together. If it is small area, it is either color spot or breakage. If there is a color change, it is color spot. If there is a visible crack, it is breakage"],
+        "different-colour-spot": ["color spot", "presence of irregular color patches on the fryum. These spots can vary widely in color from darker hues like red to lighter shades similar to the fryum's base color"],
+        "fryum-stuck-together": ["stuck together", "two individual fryums become inseparably fused together. It results in an irregular, combined shape that deviates from the typical singular form of a fryum"],
+        "middle-breakage": ["breakage", "crack or break within the structure of the fryum. The break can be seen as a distinct separation or gap disrupting the uniformity of the fryum"]
+    },
+    "macaroni1":{
+        "normal": ["depict typical elbow macaroni pasta pieces, which appear to be well-formed and consistent in shape. They exhibit a smooth, curved surface with a uniform golden-yellow color. Follow this strict hierarchy for defect classification: First, check the location. If the defect is mainly in the middle, check for a surface crack or breakage. If there is a surface crack, the anomaly is surface crack. If there is a breakage, it is central hole. If neither applies, check for color change. If the color is similar to the pasta, the defect is light color spot. If it is reddish or purplish, the defect is dark color spot. If the defect is only around the edge, check for a chip or breakage. If it is a chip, the defect is edge chip. If it is a chip, the defect is edge chip"],
+        "chip-around-edge-and-corner": ["edge chip", "small piece missing from the edge of the macaroni, giving it an uneven contour. It's typically noticeable at the outermost part of the curved surface"],
+        "different-colour-spot": ["dark color spot", "presence of a distinct reddish or purplish spot on one or more macaroni pieces. The spot contrasts noticeably with the natural color of the macaroni"],
+        "middle-breakage-small-scratches": ["central hole", " noticeable hole or breakage in the middle part of the macaroni. It disrupts the regular cylindrical shape and creates a void that is evident when viewed from any angle"],
+        "similar-colour-spots": ["light color spot", "a spot that blends in with the macaroni's natural hue, making it harder to detect at first glance. The spot usually appears slightly darker or lighter but maintains a similar color tone to the surrounding pasta"],
+        "small-cracks": ["surface crack", "fine, linear cracks or scratches along the surface of the macaroni. These imperfections are generally shallow but can be observed running along the length or circumference of the piece"]
+    },
+    "macaroni2":{
+        "normal": ["the macaroni pieces exhibit a smooth and uniform yellowish color throughout. The edges are neatly rounded without any chips or cracks. There are no discolored spots or surface scratches present. Each piece maintains a consistent shape and texture with a slightly glossy finish. Follow this strict hierarchy for defect classification: First, check the location of defect. If the defect is mainly in the middle, check for a scratch or surface break. If there is a scratch, the defect is surface scratch. If not, check for color change. If it is whitish or yelloish, it is camouflaged spot. If it is dark or purplish, it is dark spot. If the defect location is solely at the edge and there is a chip, the defect is edge chipping"],
+        "color-spot-similar-to-the-object": ["camouflaged spot", "a spot that blends with the macaroni's natural yellowish color, creating a lighter, whitish or yellowish patch. These spots are subtle and may almost merge with the macaroni's surface tone"],
+        "different-color-spot": ["dark spot", " a discolored area with a dark or purplish tint on one or more macaroni pieces. These spots stand out against the natural yellow color of the macaroni"],
+        "small-chip-around-edge": ["edge chipping", "visible breakage or missing sections at the edges of the macaroni pieces. These chips or cracks can be seen as irregularities in the otherwise smooth cylindrical shape of the macaroni"],
+        "small-scratches": ["surface scratch", "thin and shallow lines or abrasions running along the surface of the macaroni"]
+    },
+    "pcb1":{
+        "normal": ["the HC-SR04 Ultrasonic Sensor Module PCB includes 2 cylindrical metal-can transducers (Receiver and Transmitter) placed horizontally, a 4-pin header, and a rectangular silver crystal oscillator. The term 'pins' refers exclusively to the 4-pin header connectors. Follow this strict hierarchy for defect classification: First, check for silver-colored solder or melting material, if found the defect is excess solder. If not found excess solder, check for missing component. Check the full presence of metal-can transducers if not count number of pins; if one of the transducers are missing or less that 4 pins are present, the defect is missing. If no excess solder and missing component found, check for scratches, specially on the board, resulting in scratch defect. If neither applies and none of solder, missing and scratch found and the pins are bent, the defect is bent pin"],
+        "bent": ["bent pin", "one or more of the 4-pin header connector pins being misaligned significantlty"],
+        "melt": ["excess solder", "ccumulation of silver-colored solder material, usually appearing as blobs or excess spillover"],
+        "missing": ["missing component", "one or both cylindrical transducers or one or multiple pins are absent"],
+        "scratch": ["scratch", "visible scratch lines on the pdb surface, specially in the PCB board"]
+    },
+    "pcb2":{
+        "normal": ["the HC-SR04 Ultrasonic Sensor Module PCB includes 3 integrated circuits (left: U3, center: U2, right: U1) with multiple pins, a 4-pin header (VCC, Trig, Echo, GND) centered at the edge, several SMD resistors and capacitors arrayed in rows around the ICs, and 4 circular mounting holes at the corners. The blue PCB has clear labels ('HC-SR04', U1, U2, U3, labeled resistors, and capacitors). The term 'pins' refers exclusively to the 4-pin header at the top edge. Follow this strict hierarchy for defect classification: First check for missing component. If the anomaly is located at pins. First count number of pins; if less that 4 are present, the defect is missing. If all 4 pins are present, check for melting marks. If melting marks found, the defect is excess solder, if neither applies and the pins are bent, the defect is bent pin. If the anomaly is located on the PCB board, it can be missing, excess solder or scratch. Check in the order of missing, excess solder, or scratch"],
+        "bent": ["bent pin", "one or more of the 4-pin header connector pins being misaligned or bent away from their original straight position"],
+        "melt": ["excess solder", "accumulation of silver-colored solder material, usually appearing as blobs or excess spillover"],
+        "missing": ["missing component", "a component such as pins, circuits, or resistors is visibly absent from the board"],
+        "scratch": ["scratch", "visible scratch lines on the surface of the PCB board"]
+    },
+    "pcb3":{
+        "normal": ["includes 2 LEDs (transparent IR emitter and black IR receiver), a 3-pin header, an integrated circuit (U1), a blue potentiometer (3362) for sensitivity adjustment, and several SMD resistors and capacitors arrayed around the IC. The term 'pins' refers exclusively to the 3-pin header and white and black LEDs on the sides of the board. Follow this strict hierarchy for defect classification: First, check for silver-colored solder or melting material, if found the defect is excess solder. If not found excess solder, check for scratch marks or lines, if found the defect class is scratch. If not found excess solder or scratch, then check for missing component. Check the presence of components; if one of transistors, capacitors, 3-pin headers, or LEDs are absent, the defect is missing. If neither applies and none of solder, scratch, or missing found and one of the 3-pins or LEDs are bent, the defect is bent pin"],
+        "bent": ["bent pins", "one of pins or LEDs in either sides of the board are visibly bent or misaligned"],
+        "melt": ["excess solder", "accumulation of silver-colored solder material, characterized by silver-colored blobs or smears on the board"],
+        "missing": ["missing component", "certain components like resistors, capacitors, pins, or LEDs are absent"],
+        "scratch": ["scratch", "visible scratch lines or marks on the surface of the PCB board"]
+    },
+    "pcb4":{
+        "normal": ["the TP4056 Lithium Battery Charging Module PCB includes a micro USB port at the left edge, 4 connection pads labeled IN+, IN-, BAT+, and BAT- at the corners, an integrated circuit (U1) near the bottom center with multiple pins, several SMD resistors and capacitors around the IC, and 2 LEDs (CHRG, DONE) indicating charging status near the center top. The blue PCB has clear labels for component positions and connections. Check for secure attachment and alignment of the USB port, IC, resistors, capacitors, and LEDs, straight and firmly soldered connection pads, and legible markings"],
+        "extra": ["extraneous element", "presence of an unwanted object, such as dirt, dust, or an extra circuit component, located on the PCB"],
+        "missing": ["missing component", "characterized by the absence of one or more essential components such as pins, circuits, or resistors"]
+    },
+    "pipe_fryum": {
+        "normal":["is uniformly shaped with smooth, intact edges and corners. Its surface is free of any scratches, chips, or uneven marks and lacks colored spots or blemishes"],
+        "burnt":["burn mark", "characterized by an orangish-brownish patch that appears scorched or burnt"],
+        "corner-and-edge-breakage":["edge breakage", " visible breakage or chipping, located around the corners or along the edges"],
+        "different-colour-spot":["dark spot", "characterized by a small, distinct dark spot on the fryum"],
+        "similar-colour-spot":["light spot", "characterized by a small, light-colored spot that blends closely with the fryum's natural hue"],
+        "small-scratches":["scratch", "thin and shallow lines or abrasions running along the surface of the fryum"],
+        "stuck-together":["stuck together", "two or more fryums are adhered to each other, forming clusters"]
+    }
+
+}

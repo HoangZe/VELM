@@ -1,0 +1,8 @@
+qwen-vl-utils
+openai
+gem_torch
+transformers
+python-dotenv
+scikit-learn
+accelerate
+git+https://github.com/openai/CLIP.git

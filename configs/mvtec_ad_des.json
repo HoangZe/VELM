@@ -1,0 +1,121 @@
+{
+    "bottle": {
+        "normal": ["consist of two main part, the inner bore that should be clean and free of any foreign particles, debris, or contamination. And finish part which consists of the outer rim and glass transition area, and should have a smooth, intact free from any chips, cracks, or fractures. To classify the defect follow this strict instruction. First check the location of the detected anomaly. If it is not break or substantial part of it is in the inner bore (and posibbly extended outside it), it is contamination. If it is a break in the finish area (outside the inner bore), estimate the size of the broken part. If it covers 20 percent or more of the finish circumference, it is broken large. If it covers less than 20 percent, it is broken small. . Note that the predicted anomaly location is noisy, so the model should be able to classify the defect even if the predicted anomaly location is wrong"],
+        "contamination": ["contamination", "bottle containing internal debris, foreign matter, or any contamination in the inner bore of the bottle"],
+        "broken_small": ["broken small", "a break or chip on the finish part of the bottle, covering less than 20% of the finish circumference"],
+        "broken_large": ["broken large", "a break on the finish part of the bottle, covering 20% or more of the finish circumference"]
+    },
+    "cable": {
+        "normal": ["has three distinct conductive cores enclosed in a whitish outer insulation. Each core is positioned within its respective colored insulation: yellow-green (top), blue (bottom left), and brown (bottom right). The conductors are composed of tightly packed copper strands. Follow this strict hierarchy for defect classification: First look at the collor of insulations in the conductive cores. If there are 2 green-yellow insulation, or 2 blue insulation, or 2 brown insulation the defect is color mismatch. If not, then check the location of anomaly.  If it is located in the whitish outer sheath, it is either cut outer sheeth (visible cut in the whitish outer sheet) or deformed outer sheeth (rapture or punctures in the outer whitish sheath), regardless of the condition of the colored insulation and copper strands. If the anomaly is located in the colored inner insulation, it is either missing conductive core (fewer than 3 conductive core present) or inner insulation deformation (physical damage of inner insulation). If neither applies and anomaly location is solely in the copper strand the defect is either copper strand degradation (missing, eroded or reduced copper strands) or copper strand fraying (irregularly protruding copper strands). Finally, if multiple defects are present the defect class is multiple defects. Note that the predicted anomaly location is noisy, so the model should be able to classify the defect even if the predicted anomaly location is wrong"],
+        "cut_outer_insulation": ["cut outer sheath", "if the anomaly is located on the whitish outer sheath and appears as a visible cut"],
+        "combined": ["multiple defects", "if the object has multiple defects"],
+        "missing_wire": ["copper strand degradation", "if the anomaly is located on the copper strands and involves missing, eroded, blackend, coroded, or visibly reduced copper strands"],
+        "poke_insulation": ["outer sheath deformed", "if the anomaly is located on the whitish outer sheath and appears as rapture, punctures, crumbling, or holes"],
+        "missing_cable": ["missing conductive core", "if the anomaly is located on the conductor core (including the colored part) and one or more entire conductor cores are missing"],
+        "cable_swap": ["color mismatch", "if one of the three expected insulation colors (yellow-green, blue, or brown) is missing"],
+        "cut_inner_insulation": ["inner insulation deformation", "if the anomaly is located on the colored conductor core (including the colored part), where involves physical damage, deformation, or irregular arrangement of the colored inner insulation"],
+        "bent_wire": ["copper strand fraying", "if the anomaly is located solely on the copper strands without including the colored conductive core and involves irregularly protruding copper strands while the overall core shape remains intact"]
+    },
+    "capsule": {
+        "normal": ["appears to be in good condition with no visible defects or damage. The '500' label on the brownish-orange part is clear and legible, and any rotational misalignment of the black part is acceptable. Defect classification must follow a strict hierarchy. First, check for visible defects that penetrate beyond the superficial layer and disrupt the smooth surface continuity. If the defect resembles a hole or puncture, classify it as a hole. If it resembles a crack, classify it as a crack. If neither applies, examine the item for any physical deformities such as squeezing. If a deformity is present, classify it as a physical deformation. If no deformities are found, check for surface scratches. If scratches are present, classify the defect as a scratch. If there are no scratches, assess the imprint quality of the '500' label. If the imprint is faulty, classify it as a faulty imprint defect. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "crack": ["crack", "identified as a visible defect on the surface of the capsule that penetrates deeper than the superficial layer and breaks the smooth surface continuity. Cracks can be visible on either the black or brownish-orange part of the capsule. Typical signs of a crack include the presence of underlying material, which may sometimes appear as a whitish substance leaking or accumulating around the crack"],
+        "faulty_imprint": ["faulty imprint", "partial or complete fault in imprint of label 500"],
+        "poke": ["hole", "identifies as a visible defect on the surface of the capsule that penetrates deeper than the superficial layer and breaks the smooth surface continuity. Holes can be visible on either the black or brownish-orange part of the capsule. Typical signs of a hole include the presence of underlying material, which may sometimes appear as a whitish substance leaking or accumulating around the hole"],
+        "scratch": ["scratch", "visible scratches or scuff marks on its surface. These scratches might be linear or randomly oriented. They affect only the superficial layer of the capsule without penetrating deeper into the shell and without presence of whitish substance"],
+        "squeeze": ["physical deformation", "physical deformities such as squeezing, denting, or warping. These deformities alter the shape of the capsule without causing any breach in the capsule's shell"]
+    },
+    "carpet": {
+        "normal": ["has uniform and tightly woven pattern, free of any visible defects such as stains, frayed edges, or loose threads. The fibers are intact and consistently distributed, ensuring both aesthetic appeal and structural integrity. Follow this strict hierarchy for defect classification: First look at anomaly location and check for change of color. If darkish, blueish, or redish mark persent, the defect is color stain. If not, check for foreign object in the anomaly location. If there is a small metalic-type object sometimes shiny with colors similar to the carpet, it is foreign object intrusion. If not, check for extra piece of foreign loose thread, the defect is thread. If not, check for cut or hole. If the defect looks like a tearing or cut, the defect is cut. If the defect looks like a gap or hole, the defect is hole. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "color": ["color stain", "colored spot (dark, blue, or red), indicating a stain or spill that has been absorbed into the carpet fibers"],
+        "cut": ["cut", "tear resulting from cuts, or missing threads in the fabric weave"],
+        "hole": ["hole", "gaps or holes that do not look like a cut"],
+        "metal_contamination": ["foreign object intrusion", "presence of extraneous materials such as metallic pieces embedded in the carpet weave"],
+        "thread": ["thread", "loose extra thread piece protruding from the carpet surface"]
+    },
+    "grid": {
+        "normal": ["has uniformly arranged, diamond-shaped cells that are consistently sized and evenly spaced. Anomalies follow a strict hierarchy: Always check for contamination first: If any transparent object, metal object, or thread is present, classify it as corresponding contamination. Visual obstructions caused by contamination (transparent, metal, or thread) can mimic breaks, gaps, or deformation. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "bent": ["deformed", "grid pattern is interrupted by small bent or deformed wires causing local curvature irregularities"],
+        "broken": ["broken", "grid pattern has broken wires with visible gaps and fractured segments"],
+        "glue": ["transparent contamination", "grid pattern is partially obscured by a glossy or semi-transparent residue that distorts the visual uniformity"],
+        "metal_contamination": ["metal contamination", "grid pattern is disrupted by an irregularly shaped metallic protrusion fused to the structure, blending in color but breaking the geometric flow"],
+        "thread": ["thread contamination", "grid pattern is entangled with fine fibrous strands, either clustered in a knot or stretched loosely across the surface"]
+    },
+    "hazelnut": {
+        "normal": ["characterized with a smooth, unblemished shell. The shell is a light brown color with a slightly textured surface, featuring small ridges and grooves. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "crack": ["cracked shell", "fissure or crack on the shell of hazelnut"],
+        "cut": ["scratch mark", "long, linear scratch on the surface of the hazelnut shell"],
+        "hole": ["borehole", "small circular hole in the shell"],
+        "print": ["white stain", "whitish substance or stain on the shell of the hazelnut"]
+    },
+    "leather":{
+        "normal": ["consistent grain patterns and a uniform color. The texture is smooth slightly textured. When assessing anomalies, follow this hierarchy for classification: First, check for contamination anomalies, such as color irregularities (e.g., unintended light grayish or reddish discolorations) or glue contamination (e.g., transparent residues, wet marks, or darker patches). If either contamination type is present, classify the defect accordingly, regardless of shape resemblance to other classes. Contamination overrides all other defect types and visual shape analysis is only relevant after contamination is ruled out. If no contamination is found, examine the surface for structural defects: prioritize folded ridge anomalies (raised areas or strips caused by folding). If no folds are present, check for cut and puncture hole defects. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "color": ["color irregularities", "Unintended light grayish or redish discolorations on the leather surface that visibly contrast with the surrounding materiale"],
+        "cut": ["cut", "cut, slit, or tear on the leather surface. The cut may include a small hole but is distinguished by the presence of a linear or curved opening extending outward from the puncture point. If any color irregularities are present, even if the defect visually resembles a cut, it should be classified as contamination instead"],
+        "fold": ["folded ridge", "a raised area or strip in the leather caused by folding"],
+        "glue": ["glue contamination", "The presence of a transparent foreign substance or wet mark, often appearing as a transparent residue or a slightly darker area than the leather itself, suggesting glue, liquid, or embedded material"],
+        "poke": ["puncture hole", "a small, isolated, visible hole penetrating through the leather surface, without any visible cuts or tears extending from it"]
+    },
+    "metal_nut": {
+        "normal": [" have an irregular pentagonal shape with a central threaded hole. The surface textures and edges are relatively consistent, but with some visible wear or surface inconsistencies as typical for metal parts. Follow this strict hierarchy to classify the anomaly: first, check if the anomaly involves the entire metal nut, which indicates a distorted hexagonal defect. If the anomaly involves only part of the metal nut, check if it is related to abnormal color marks, indicating color contamination. If the anomaly involves only part of the metal nut and there are no abnormal color marks, the defect is either edge deformation or a scratch. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "bent": ["edge deformations", "irregularities and distortions along the edges of the nut, appearing to include extra metal pieces or protrusions along the edge"],
+        "color": ["color contamination", "abnormal blue, dark, or red colors on the surface of the metal nut"],
+        "flip": ["distorted hexagonal", "irregularly shaped lobes, leading to a loss of the characteristic hexagonal symmetry"],
+        "scratch": ["scratch", "visible scratches or abrasions on the surface of the metal nut"]        
+    },
+    "pill": {
+        "normal": ["has white and oval shape, with red speckling uniformly distributed across the surface. The FF logo is imprinted on one side. The overall appearance is consistent across different units. The most important factor in classifying defects is their location. Follow this strict hierarchy to classify the anomaly: first, check if the detected anomaly involves the entire pill, indicating pill type; if not, check if the FF logo is partially missing, indicating faulty imprint; if neither, check if the anomaly is strictly on the edges with broken parts, indicating crack; otherwise, the defect is either color contamination, protrusion deformities, or scratch. Finally, if multiple defects are present the defect class is multiple defects. The predicted anomaly location may be noisy, so the model should still classify the defect correctly even if the predicted location is incorrect"],
+        "color": ["color contamination", "unintended spots or marks, streak, or patches of different colors (bright red, dark blue, solid red, yellow) are present on the pill's surface"],
+        "combined": ["multiple defects", "if the object has multiple defects"],
+        "contamination": ["protrusion deformities", "abnormal bumps or protrusions on the pill's surface, indicating contamination or impurities"],
+        "crack": ["chipped edge", "missing parts along the edge, indicating chopping or breakage. This anomaly strictly pertains to the edges of the pill"],
+        "faulty_imprint": ["faulty imprints", "the imprinted FF logo is partially missing"],
+        "pill_type": ["pill type", "uneven pigmentation and unusual coloration, differing significantly from the normal uniform appearance"],
+        "scratch": ["scratch", "visible surface imperfections such as scratches or indented marks"]
+    },
+    "screw": {
+        "normal": ["has 3 components: head, shank, and thread. The head is flat and has a slot for a screwdriver. The shank is cylindrical and smooth. The thread is spiral and wraps around the shank and continue to the pointed tip, which helps in starting the screw into the material. Classify the anomaly following this strict hierarchy: Location is the primary condition. First, if the anomaly is located on the head, it is scratched head, if on the shank, it is scratched neck. If on the thread, if located at the tip of thread, it is manipulated front, if on other part of the thread, if it is visible from top view, it is thread top, if it is directed to the side, it is thread side. Note that the predicted anomaly location is noisy, so the model should be able to classify the defect even if the predicted anomaly location is wrong"],
+        "manipulated_front": ["tip thread deformation", "deformation at the tip of the thread, affecting its ability to penetrate materials effectively"],
+        "scratch_head": ["scratched head", "damage or scratch on the top head of the screw"],
+        "scratch_neck": ["scratched shank", "scratch or deformity on the shank of the screw"],
+        "thread_side": ["thread side", "defects or irregularities in the threading, where the serrated edges are damaged"],
+        "thread_top": ["thread top", "defects or irregularities in the threading, where the serrated edges are damaged"]
+    },
+    "tile": {
+        "normal": ["exhibit a uniform speckled appearance with a consistent distribution of darker spots on a lighter background. The surface texture appears smooth and free of visable cracks or irregularities"],
+        "crack": ["crack", "prominent, deep cracks on the surface of the tile, often intersecting to from  branching patterns. These fissues may compromize the tile's structural integrity"],
+        "glue_strip": ["adhesive residue", "presence of adhesive material or tape remnants on the tile surface, which disrupt the tile's uniform pattern and aesthetic quality. The residue typically manifests as transparent or semi-transparent patches with irregular shapes"],
+        "gray_stroke": ["smudge marks", "irregular, dark patches that disrupt the uniform pattern of the tile, resembling smudges or stain marks"],
+        "oil": ["resin contamination", "exhibit areas of resin conatmination, characterized by localized patches where resin has pooled and solidified. These resin spots appear as translucent or discolored areas that stand out against the intended surface design"],
+        "rough": ["abrasion", "streak-like abrasions, often appearing as elongated, thin, irregular patches that disrupt the uniform speckled pattern of the tile"]
+    },
+    "toothbrush": {
+        "normal": ["normal toothbrush"],
+        "defective": ["defective", "toothbrush with visible defects"]
+    },
+    "transistor": {
+        "normal": ["are housed in a black plastic package with three metallic leads. The transistor is inserted into a protoboard. The leads of transistor are inserted into separate holes in a single horizontal row. The transistor is positioned vertically on the protoboard, and their black plastic bodies are oriented upright. Follow this strict hierarchy for defect classification: First, check the location of the anomaly. If it contains the entire transistor, the defect is mispositioned. If it only involves parts of the black package, the defect is chipped package. If neither applies and the anomaly involves a lead, always check its length first. If it is shorter characterized by red line contour directed to the protoboard without silver lead, classify it as cut lead immediately. Only if the lead is full-length characterized by contour lines that contains silver lead should it be classified as bent lead"],
+        "bent_lead": ["bent lead", "one of the leads is protruding or fraying out but with a full length"],
+        "cut_lead": ["cut lead", "one lead is partially cut. The defining characteristic is that the lead appears shortened or truncated compared to the others. The cut lead does not show a change in direction but rather a reduction in length"],
+        "damaged_case": ["chipped package", "damage in the encapsulating packages, often resulting in the exposure of internal components"],
+        "misplaced": ["mispositioned", "transistor is either entirely absent from the protoboard, placed incorrectly such that it does not maintain the proper orientation, or has more than one lead bent or misaligned"]
+    },
+    "wood": {
+        "normal": ["exhibits a consistent, straight-grain texture with minimal imperfections. The surface is smooth with a uniform reddish-brown color. Note that the predicted anomaly location is noisy, so the model should be able to classify the defect even if the predicted anomaly location is wrong"],
+        "color": ["color", "unnatural colorations, typically appearing as spots or smudges, caused by infilteration of ink or dye substances onto the wood surface"],
+        "combined": ["multiple defects", "if the object has multiple defects"],
+        "hole": ["borhole", "small, round holes typically caused by insects or mechanical drilling"],
+        "liquid": ["liquid", "presence of areas where liquid like resin has accumulated and disrupted the wood grain"],
+        "scratch": ["scratch", "the wood has been abraded with visible scratches, scuffs, or gaugs. These scratches can affect both appearance and structural integrity"]
+    },
+    "zipper": {
+        "normal": ["features two primary components: consists of two primary components: the tape and the coil. The tape is a fabric strip with a uniform texture and color, free from fraying or pilling. The coil is made of durable material, interlocking evenly with consistent spacing, and has a smooth surface without deformation. Classify the anomaly following this strict hierarchy: Location is the primary condition. First, determine if the anomaly is on the tape or the coil. If on the tape: if touches the outermost edge, it is frayed tape edges; if on fabric adjacent to the zipper but not touching the edge, it is fabric pilling. If on the coil: if portion of the surface looks rough, the defect is rough coil; If portion of the surface looks shiny, the defect is shiny coil; if the chain is partially unzipped with a minor gap, it is partial split; if the coil is squeezed or compressed, it is compression distortion. Finally, if multiple defects are present the defect class is multiple defects. Note that the predicted anomaly location is noisy, so the model should be able to classify the defect even if the predicted anomaly location is wrong"],
+        "broken_teeth": ["shiny coil", "portions of the coil exhibit an unusual shiny surface texture compared to the rest. This anomaly can be characterized by changes directly on the teeth, including any unusual shine. Additionally, this anomaly may sometimes cause the fabric to lie on the coil teeth themselves instead of just beside them"],
+        "combined": ["multiple defects", "if the object has multiple defects"],
+        "fabric_border": ["frayed tape edges", "the textile tape edges have visible fraying or unraveling. This anomaly is strictly confined to the outermost edges of the zipper tape, regardless of texture"],
+        "fabric_interior": ["fabric pilling", "characterized by the presence of small balls of fiber on the fabric adjacent to the zipper, but crucially not on the edge. It lies between the very border of the tape and zipper. This anomaly impacts the fabric surrounding the zipper rather than the coil or teeth themselves"],
+        "rough": ["rough coil", "portions of the coil exhibit an unusual rough surface texture compared to the rest. This anomaly can be characterized by changes directly on the teeth, including rough or jagged edges"],
+        "split_teeth": ["partial split", "chain is partially unzipped in a small section, causing a minor gap between the teeth"],
+        "squeezed_teeth": ["compression distortion", "coil appears deformed due to being tightly compressed, squeezed, or pinched. This distortion typically causes the individual teeth of the coil to overlap horizontally"]
+    }
+
+}
