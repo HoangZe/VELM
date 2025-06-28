@@ -1,10 +1,18 @@
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-classification-on-mvtecad)](https://paperswithcode.com/sota/anomaly-classification-on-mvtecad?p=detect-classify-act-categorizing-industrial)
+
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-classification-on-mvtec-ac)](https://paperswithcode.com/sota/anomaly-classification-on-mvtec-ac?p=detect-classify-act-categorizing-industrial)
+
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-classification-on-visa-ac)](https://paperswithcode.com/sota/anomaly-classification-on-visa-ac?p=detect-classify-act-categorizing-industrial)
+
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-severity-classification-anomaly-vs)](https://paperswithcode.com/sota/anomaly-severity-classification-anomaly-vs?p=detect-classify-act-categorizing-industrial)
+
 # VELM (Vision Expert + Language Model): A framework for Anomaly Classification (AC)
 
 Repository provides the source code for the paper "Detect, Classify, Act: Categorizing Industrial Anomalies with Multi-Modal Large Language Models":
 
-### [arXiv](https://arxiv.org/abs/2505.02626)
+### [arXiv](https://arxiv.org/abs/2505.02626) | [Video](https://youtu.be/mfKS1d3kOdc) | [Poster](https://docs.google.com/presentation/d/1VLDDxsHh8oXfJH_cY2bRDJERIh0bBEGUornfIgjpADU/edit?usp=sharing)
 
-![teaser](figures/framework.jpg) 
+![teaser](figures/framework.jpg)
 
 ## Overview
 
