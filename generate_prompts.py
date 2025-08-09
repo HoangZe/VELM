@@ -87,50 +87,51 @@ def collect_prompts(
         dict: Dictionary containing prompts and associated image paths
     """
     images_dict = {}
-    
+
     # Iterating over each object category
     for category in object_categories:
         logger.info(f"Processing category: {category}")
         test_dir = data_dir / category / 'test'
-        
+
         if not test_dir.exists():
             logger.warning(f"Test directory not found for category {category}: {test_dir}")
             continue
-            
+
         try:
             all_defect_classes = [d for d in os.listdir(test_dir) if os.path.isdir(test_dir / d)]
+            logger.debug(f"Found defect classes for {category}: {all_defect_classes}")
             defect_classes = [defect_class for defect_class in all_defect_classes if defect_class != 'good']
-            
             # Generate text based on category and defect classes
-            text = generate_text_conditioned(base_text, category, defects_data)
-            
+            logger.debug(f"Filtered defect classes for {category}: {defect_classes}")
             # Iterating over each defect class
+            text = generate_text_conditioned(base_text, category, defects_data)
+
             for defect_class in defect_classes:
                 logger.debug(f"Processing defect class: {defect_class}")
-                
+
                 if ddad:
                     recons_dir = Path.cwd() / 'ddad_results' / 'reconstructed' / category / 'test' / defect_class
                     query_dir = Path.cwd() / 'ddad_results' / 'queries' / category / defect_class
-                    
+
                     if not recons_dir.exists() or not query_dir.exists():
                         logger.warning(f"DDAD directories not found for {category}/{defect_class}")
                         continue
-                        
-                    recons_files = [f for f in os.listdir(recons_dir) if f.endswith(('.jpg', '.png', '.jpeg'))]
-                    query_files = [f for f in os.listdir(query_dir) if f.endswith(('.jpg', '.png', '.jpeg'))]
-                    
+
+                    recons_files = [f for f in os.listdir(recons_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                    query_files = [f for f in os.listdir(query_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+
                     if len(recons_files) != len(query_files):
-                        logger.warning(f"Mismatch in number of files for {category}/{defect_class}: {len(recons_files)} vs {len(query_files)}")
                         # Use the minimum length to avoid index errors
+                        logger.warning(f"Mismatch in number of files for {category}/{defect_class}: {len(recons_files)} vs {len(query_files)}")
                         min_len = min(len(recons_files), len(query_files))
                         recons_files = recons_files[:min_len]
                         query_files = query_files[:min_len]
-                    
+
                     for i in range(len(recons_files)):
                         key = f"{category}_{defect_class}_{recons_files[i].split('.')[0]}"
                         images_dict[key] = {
-                            'image': str(query_dir / query_files[i]), 
-                            'recons': str(recons_dir / recons_files[i]), 
+                            'image': str(query_dir / query_files[i]),
+                            'recons': str(recons_dir / recons_files[i]),
                             'text': text
                         }
                 else:
@@ -138,9 +139,9 @@ def collect_prompts(
                     if not defect_class_dir.exists():
                         logger.warning(f"Defect class directory not found: {defect_class_dir}")
                         continue
-                        
-                    image_files = [f for f in os.listdir(defect_class_dir) if f.endswith(('.jpg', '.png', '.jpeg'))]
-                    
+
+                    image_files = [f for f in os.listdir(defect_class_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                    logger.debug(f"Images in {defect_class_dir}: {image_files}")
                     for image_file in image_files:
                         # Define the path to the current image file
                         image_path = defect_class_dir / image_file
