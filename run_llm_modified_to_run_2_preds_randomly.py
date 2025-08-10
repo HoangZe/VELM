@@ -1,10 +1,3 @@
-"""
-Run LLM models for anomaly classification.
-
-This script supports multiple LLM backends (GPT-4o, GPT-4o-mini, and Qwen2-VL) for anomaly classification
-with various heatmap visualization modes.
-"""
-
 import os
 import base64
 from pathlib import Path
@@ -14,11 +7,12 @@ from PIL import Image
 from tqdm import tqdm
 from dotenv import load_dotenv
 import torch
+import random  # Added for random selection
 from openai import OpenAI
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path
-
+from collections import defaultdict  # Moved import to top
 
 def encode_image(image: Image.Image) -> str:
     """
@@ -35,7 +29,6 @@ def encode_image(image: Image.Image) -> str:
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return img_str
 
-
 def get_gpt_output(client: OpenAI, images: List[str], text: str, model_name: str, heatmap_mode: str) -> Tuple[str, Dict[str, int]]:
     """
     Get output from GPT model.
@@ -45,6 +38,7 @@ def get_gpt_output(client: OpenAI, images: List[str], text: str, model_name: str
         images: List of base64 encoded images
         text: Prompt text
         model_name: Name of the GPT model to use
+        heatmap_mode: Heatmap visualization mode
     
     Returns:
         Tuple[str, Dict[str, int]]: Model output and token usage
@@ -79,7 +73,6 @@ def get_gpt_output(client: OpenAI, images: List[str], text: str, model_name: str
     )
     return response.choices[0].message.content, response.usage
 
-
 def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], input_txt: str, heatmap_mode: str) -> List[str]:
     """
     Get output from Qwen2-VL model.
@@ -94,7 +87,6 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
     Returns:
         List[str]: Model output
     """
-    # Multiple image message
     if heatmap_mode == "none":
         messages = [
             {
@@ -119,7 +111,6 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
             }
         ]
     
-    # Preparation for inference
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
@@ -144,7 +135,6 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
     )
     return output_text
 
-
 def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
     """
     Get configuration for a specific dataset.
@@ -154,9 +144,6 @@ def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
         
     Returns:
         Tuple[Path, Path]: Data directory and JSON file path
-        
-    Raises:
-        ValueError: If the dataset is not supported
     """
     if dataset == 'mvtec_ad':
         data_dir = Path.cwd() / 'datasets' / 'mvtec_ad'
@@ -172,6 +159,32 @@ def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
     
     return data_dir, json_file_path
 
+def parse_image_filename(image_name: str) -> Tuple[str, str]:
+    """
+    Parse image filename to extract category and defect class.
+    
+    Args:
+        image_name: Image filename or key (e.g., 'candle_burnt_001')
+        
+    Returns:
+        Tuple[str, str]: Category and defect class
+    """
+    temp, _, _ = image_name.rpartition('_')
+    if temp.lower().startswith("metal"):
+        category1, _, gt_class = temp.partition('_')
+        category2, _, gt_class = gt_class.partition('_')
+        category = f'{category1}_{category2}'.lower()
+        gt_class = gt_class.lower()
+    elif temp.lower().startswith("pipe"):
+        category1, _, gt_class = temp.partition('_')
+        category2, _, gt_class = gt_class.partition('_')
+        category = f'{category1}_{category2}'.lower()
+        gt_class = gt_class.lower()
+    else:
+        category, _, gt_class = temp.partition('_')
+        category = category.lower()
+        gt_class = gt_class.lower()
+    return category, gt_class
 
 def run_llm(
     model_type: str,
@@ -208,8 +221,23 @@ def run_llm(
     predictions = {}
     total_tokens = 0
     
-    # Loop over the prompts
-    for key, value in tqdm(prompts_dict.items()):
+    # Group prompts by category and defect class
+    grouped_prompts = defaultdict(list)
+    for key, value in prompts_dict.items():
+        object_cat, defect_class = parse_image_filename(key)
+        grouped_prompts[(object_cat, defect_class)].append((key, value))
+    
+    # Select 2 random images per defect class per category
+    filtered_prompts = {}
+    for (object_cat, defect_class), items in grouped_prompts.items():
+        if len(items) > 2:
+            selected_items = random.sample(items, 2)
+        else:
+            selected_items = items
+        for key, value in selected_items:
+            filtered_prompts[key] = value
+    
+    for key, value in tqdm(filtered_prompts.items()):
         images = []
         object_cat = key.split('_')[0]
         
@@ -222,7 +250,7 @@ def run_llm(
                     else:
                         image_path = Path(data_dir) / object_cat / 'test' / 'good' / f'00{i}.png'
                     image = Image.open(image_path)
-                    image = image.resize((image_size, image_size))  # Resize the image
+                    image = image.resize((image_size, image_size))
                     if model_type == 'gpt':
                         images.append(encode_image(image))
                     else:
@@ -230,9 +258,13 @@ def run_llm(
             elif dataset == 'visa_ac':
                 for i in range(num_ref):
                     if object_cat == 'pipe':
-                        image_path = Path(data_dir) / 'pipe_fryum' / 'test' / 'good' / f'00{i}.png'
+                        good_dir = Path(data_dir) / 'pipe_fryum' / 'test' / 'good'
                     else:
-                        image_path = Path(data_dir) / object_cat / 'test' / 'good' / f'00{i}.png'
+                        good_dir = Path(data_dir) / object_cat / 'test' / 'good'
+                    image_files = [f for f in os.listdir(good_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                    if not image_files:
+                        raise FileNotFoundError(f"No valid images found in {good_dir}")
+                    image_path = good_dir / image_files[0]
                     image = Image.open(image_path)
                     image = image.resize((image_size, image_size))
                     if model_type == 'gpt':
@@ -240,7 +272,6 @@ def run_llm(
                     else:
                         images.append(image)
         
-        # Define the path to the image file
         image_path = value['image']
         query_image = Image.open(image_path)
         query_image = query_image.resize((image_size, image_size))
@@ -253,7 +284,6 @@ def run_llm(
         defect_class = key.split('_')[1:-1]
         defect_class = '_'.join(defect_class)
         
-        # Load the heatmap based on the heatmap mode
         if heatmap_mode == "contour":
             if object_cat == 'metal':
                 object_cat = 'metal_nut'
@@ -261,7 +291,6 @@ def run_llm(
             if object_cat == 'pipe':
                 object_cat = 'pipe_fryum'
                 defect_class = defect_class[6:]
-
             heatmap_dir = Path.cwd() / f'contour_gt_{dataset}'
             heatmap_path = heatmap_dir / object_cat / 'test' / defect_class / f'{key.split("_")[-1]}.png'
             heatmap = Image.open(heatmap_path)
@@ -271,34 +300,28 @@ def run_llm(
             else:
                 images.append(heatmap)
         
-        # Get the text
         text = value['text']
         
-        # Call the appropriate model
         if model_type == 'gpt':
-            response, usage = get_gpt_output(client, images, text, gpt_model_name)
+            response, usage = get_gpt_output(client, images, text, gpt_model_name, heatmap_mode)
             total_tokens += usage.total_tokens
             print(f"{key}: {response} (Tokens used: {usage.total_tokens})")
             predictions[key] = response
-        else:  # qwen
+        else:
             qwen_output = get_qwen_output(model, processor, images, text, heatmap_mode)
             print(f"{key}: {qwen_output[0]}")
             predictions[key] = qwen_output[0]
     
-    # Print token usage for GPT model
     if model_type == 'gpt':
         print(f"Total tokens used: {total_tokens}")
-        # Estimate the cost
-        cost_estimate = (total_tokens / 1e6) * 2.5  # assuming $2.5 per 1M tokens
+        cost_estimate = (total_tokens / 1e6) * 2.5
         print(f"Estimated cost: ${cost_estimate:.2f}")
     
-    # Save the predictions to a JSON file
     save_path = get_save_path(heatmap_mode, dataset, model_type, gpt_model_name)
     save_json(predictions, save_path)
     print(f"[✓] Predictions saved to: {save_path}")
     
     return predictions
-
 
 def main():
     """Main function to run the LLM model."""
@@ -319,28 +342,22 @@ def main():
                         help='Number of reference images to use.')
     args = parser.parse_args()
     
-    # Get dataset configuration
     data_dir, json_file_path = get_dataset_config(args.dataset)
     
-    # Load the prompts from the JSON file
     prompts_dict = load_json(json_file_path)
     
-    # Initialize model based on type
     if args.model == 'gpt':
-        # Set OpenAI API key
         load_dotenv()
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         model = None
         processor = None
-    else:  # qwen
-        # Load the model on the available device(s)
+    else:
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
         )
         processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
         client = None
     
-    # Run the LLM
     run_llm(
         model_type=args.model,
         prompts_dict=prompts_dict,
@@ -357,6 +374,5 @@ def main():
     
     print("Done")
 
-
 if __name__ == '__main__':
-    main() 
+    main()
