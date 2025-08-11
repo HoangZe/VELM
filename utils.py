@@ -53,22 +53,25 @@ def save_json(data: Dict[str, Any], file_path: Union[str, Path]) -> None:
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
-def get_save_path(heatmap_mode: str, dataset: str, model_type: str, gpt_model_name: str = "gpt-4o") -> Path:
+def get_save_path(heatmap_mode: str, dataset: str, model_type: str, gpt_model_name: str = "gpt-4o", hf_model_name: str = None,) -> Path:
     """
     Get the save path for predictions based on heatmap mode and dataset.
-    
+
     Args:
         heatmap_mode: Heatmap visualization mode
         dataset: Dataset name
         model_type: Type of model used
         gpt_model_name: Name of the GPT model used (for GPT model)
-    
+
     Returns:
         Path: Save path for predictions
     """
     # For GPT models, include the specific model name in the filename
     if model_type == 'gpt':
         model_identifier = gpt_model_name.replace('-', '_')
+    elif hf_model_name:
+        # meta-llama/Llama-3.2-11B-Vision-Instruct -> llama_3_2_11b_vision_instruct
+        model_identifier = hf_model_name.split('/')[-1].lower().replace('-', '_')
     else:
         model_identifier = model_type
         

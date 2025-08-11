@@ -1,7 +1,7 @@
 """
 Run LLM models for anomaly classification.
 
-This script supports multiple LLM backends (GPT-4o, GPT-4o-mini, and Qwen2-VL) for anomaly classification
+This script supports multiple LLM backends (GPT-4o, GPT-4o-mini, Qwen2.5-VL-Instruct, and LLaMa-3.2-Vision-Instruct) for anomaly classification
 with various heatmap visualization modes.
 """
 
@@ -15,7 +15,7 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 import torch
 from openai import OpenAI
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path
 
@@ -23,10 +23,10 @@ from utils import load_json, save_json, get_save_path
 def encode_image(image: Image.Image) -> str:
     """
     Encode a PIL Image to base64 string.
-    
+
     Args:
         image: PIL Image to encode
-    
+
     Returns:
         str: Base64 encoded image string
     """
@@ -39,13 +39,13 @@ def encode_image(image: Image.Image) -> str:
 def get_gpt_output(client: OpenAI, images: List[str], text: str, model_name: str, heatmap_mode: str) -> Tuple[str, Dict[str, int]]:
     """
     Get output from GPT model.
-    
+
     Args:
         client: OpenAI client
         images: List of base64 encoded images
         text: Prompt text
         model_name: Name of the GPT model to use
-    
+
     Returns:
         Tuple[str, Dict[str, int]]: Model output and token usage
     """
@@ -82,15 +82,15 @@ def get_gpt_output(client: OpenAI, images: List[str], text: str, model_name: str
 
 def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], input_txt: str, heatmap_mode: str) -> List[str]:
     """
-    Get output from Qwen2-VL model.
-    
+    Get output from Qwen2.5-VL model.
+
     Args:
-        model: Qwen2-VL model
+        model: Qwen2.5-VL model
         processor: Qwen2-VL processor
         input_imgs: List of PIL Images
         input_txt: Prompt text
         heatmap_mode: Heatmap visualization mode
-    
+
     Returns:
         List[str]: Model output
     """
@@ -118,7 +118,7 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
                 ],
             }
         ]
-    
+
     # Preparation for inference
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
@@ -131,7 +131,7 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
         padding=True,
         return_tensors="pt",
     )
-    
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
 
@@ -144,17 +144,76 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
     )
     return output_text
 
+def get_llama_output(
+    model: Any,
+    processor: Any,
+    input_imgs: List[Image.Image],
+    input_txt: str,
+    heatmap_mode: str
+) -> List[str]:
+    """
+    Llama-3.2-11B-Vision-Instruct inference.
+
+    - Matches Qwen's flow: if heatmap_mode == 'none', use [ref, query];
+      if 'contour', use [ref, query, heatmap].
+    """
+    if heatmap_mode == "none":
+        # [ref, query]
+        content_images = [input_imgs[0], input_imgs[1]]
+        messages = [[{
+            "role": "user",
+            "content": [
+                {"type": "image"},  # ref
+                {"type": "image"},  # query
+                {"type": "text", "text": input_txt},
+            ],
+        }]]
+    else:
+        # [ref, query, heatmap]
+        content_images = [input_imgs[0], input_imgs[1], input_imgs[2]]
+        messages = [[{
+            "role": "user",
+            "content": [
+                {"type": "image"},  # ref
+                {"type": "image"},  # query
+                {"type": "image"},  # heatmap
+                {"type": "text", "text": input_txt},
+            ],
+        }]]
+
+    # Convert messages to a prompt containing <|image|> placeholders
+    input_text = processor.apply_chat_template(
+        messages, add_generation_prompt=True
+    )
+
+    # Build tensors (IMPORTANT: use keyword args + return_tensors)
+    inputs = processor(
+        text=input_text,
+        images=content_images if len(content_images) > 1 else content_images[0],
+        add_special_tokens=False,
+        return_tensors="pt",
+    ).to(model.device)
+
+    with torch.no_grad():
+        generated_ids = model.generate(**inputs, max_new_tokens=128)
+
+    # Trim prompt tokens before decoding (same pattern you used)
+    trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+    out_text = processor.batch_decode(
+        trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )
+    return out_text
 
 def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
     """
     Get configuration for a specific dataset.
-    
+
     Args:
         dataset: Dataset name ('mvtec_ad', 'mvtec_ac', or 'visa_ac')
-        
+
     Returns:
         Tuple[Path, Path]: Data directory and JSON file path
-        
+
     Raises:
         ValueError: If the dataset is not supported
     """
@@ -169,7 +228,7 @@ def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
         json_file_path = Path.cwd() / 'configs' / 'prompts' / 'visa_ac_prompts.json'
     else:
         raise ValueError(f"Unsupported dataset: {dataset}")
-    
+
     return data_dir, json_file_path
 
 
@@ -188,7 +247,7 @@ def run_llm(
 ) -> Dict[str, str]:
     """
     Run LLM model for anomaly detection.
-    
+
     Args:
         model_type: Type of model to use ('gpt-4o', 'gpt-4o-mini' or 'qwen')
         prompts_dict: Dictionary of prompts
@@ -201,18 +260,18 @@ def run_llm(
         model: Qwen model (for Qwen model)
         processor: Qwen processor (for Qwen model)
         gpt_model_name: Name of the GPT model to use (for GPT model)
-    
+
     Returns:
         Dict[str, str]: Dictionary of predictions
     """
     predictions = {}
     total_tokens = 0
-    
+
     # Loop over the prompts
     for key, value in tqdm(prompts_dict.items()):
         images = []
         object_cat = key.split('_')[0]
-        
+
         # Load reference image
         if num_ref != 0:
             if dataset == 'mvtec_ad' or dataset == 'mvtec_ac':
@@ -239,20 +298,20 @@ def run_llm(
                         images.append(encode_image(image))
                     else:
                         images.append(image)
-        
+
         # Define the path to the image file
         image_path = value['image']
         query_image = Image.open(image_path)
         query_image = query_image.resize((image_size, image_size))
-        
+
         if model_type == 'gpt':
             images.append(encode_image(query_image))
         else:
             images.append(query_image)
-        
+
         defect_class = key.split('_')[1:-1]
         defect_class = '_'.join(defect_class)
-        
+
         # Load the heatmap based on the heatmap mode
         if heatmap_mode == "contour":
             if object_cat == 'metal':
@@ -270,43 +329,48 @@ def run_llm(
                 images.append(encode_image(heatmap))
             else:
                 images.append(heatmap)
-        
+
         # Get the text
         text = value['text']
-        
+
         # Call the appropriate model
         if model_type == 'gpt':
             response, usage = get_gpt_output(client, images, text, gpt_model_name)
             total_tokens += usage.total_tokens
             print(f"{key}: {response} (Tokens used: {usage.total_tokens})")
             predictions[key] = response
-        else:  # qwen
+        elif model_type == 'qwen':  # qwen
             qwen_output = get_qwen_output(model, processor, images, text, heatmap_mode)
             print(f"{key}: {qwen_output[0]}")
             predictions[key] = qwen_output[0]
-    
+        elif model_type == 'llama': #llama
+            llama_output = get_llama_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {llama_output[0]}")
+            predictions[key] = llama_output[0]
+
+
     # Print token usage for GPT model
     if model_type == 'gpt':
         print(f"Total tokens used: {total_tokens}")
         # Estimate the cost
         cost_estimate = (total_tokens / 1e6) * 2.5  # assuming $2.5 per 1M tokens
         print(f"Estimated cost: ${cost_estimate:.2f}")
-    
+
     # Save the predictions to a JSON file
     save_path = get_save_path(heatmap_mode, dataset, model_type, gpt_model_name)
     save_json(predictions, save_path)
     print(f"[✓] Predictions saved to: {save_path}")
-    
+
     return predictions
 
 
 def main():
     """Main function to run the LLM model."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Run LLM model for anomaly detection.")
-    parser.add_argument('--model', type=str, choices=['gpt', 'qwen'],
-                        default='gpt', help='Model to use (gpt or qwen).')
+    parser.add_argument('--model', type=str, choices=['gpt', 'qwen', 'llama'],
+                        default='gpt', help='Model to use (gpt, qwen, or llama).')
     parser.add_argument('--gpt_model', type=str, choices=['gpt-4o', 'gpt-4o-mini'],
                         default='gpt-4o', help='GPT model to use (only applicable if model=gpt).')
     parser.add_argument('--dataset', type=str, choices=['mvtec_ad', 'mvtec_ac', 'visa_ac'],
@@ -317,14 +381,18 @@ def main():
                         help='Size to resize images to.')
     parser.add_argument('--num_ref', type=int, default=1,
                         help='Number of reference images to use.')
+    parser.add_argument('--hf_model', type = str, default='meta-llama/Llama-3.2-11B-Vision-Instruct',
+                        help='HF model id (only if model=llama).')
+    parser.add_argument('--hf_token', type = str, default=None,
+                        help='Hugging Face token (if omitted, will read HUGGINGFACE_TOKEN or HF_TOKEN from env).')
     args = parser.parse_args()
-    
+
     # Get dataset configuration
     data_dir, json_file_path = get_dataset_config(args.dataset)
-    
+
     # Load the prompts from the JSON file
     prompts_dict = load_json(json_file_path)
-    
+
     # Initialize model based on type
     if args.model == 'gpt':
         # Set OpenAI API key
@@ -332,12 +400,23 @@ def main():
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         model = None
         processor = None
-    else:  # qwen
+    elif args.model == 'qwen':  # qwen
         # Load the model on the available device(s)
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen2-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            "Qwen/Qwen2.5-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
         )
-        processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+        processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+        client = None
+    elif args.model == 'llama': #llama
+        # Load the llama 3.2 model from available devices
+        hf_token = os.getenv("llama_access")
+        model = MllamaForConditionalGeneration.from_pretrained(
+          "meta-llama/Llama-3.2-11B-Vision-Instruct",
+          torch_dtype = "auto",
+          device_map = "auto",
+          token = hf_token
+        )
+        processor = AutoProcessor.from_pretrained("meta-llama/Llama-3.2-11B-Vision-Instruct", token = hf_token)
         client = None
     
     # Run the LLM

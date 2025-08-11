@@ -1,8 +1,12 @@
 qwen-vl-utils
 openai
 gem_torch
-transformers
+transformers>=4.45.0
 python-dotenv
 scikit-learn
 accelerate
 git+https://github.com/openai/CLIP.git
+torch>=2.2.0
+safetensors>=0.4.5
+pillow>=10.0.0
+huggingface-hub>=0.23.0
