@@ -192,7 +192,8 @@ def get_llama_output(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
 
-    generated_ids = model.generate(**inputs, max_new_tokens=128)
+    pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
+    generated_ids = model.generate(**inputs, max_new_tokens=128, pad_token_id=pad_id)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -244,7 +245,8 @@ def get_llava_output(model, processor, input_imgs, input_txt, heatmap_mode):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
 
-    generated_ids = model.generate(**inputs, max_new_tokens=128)
+    pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
+    generated_ids = model.generate(**inputs, max_new_tokens=128, pad_token_id=pad_id)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -338,9 +340,13 @@ def run_llm(
             elif dataset == 'visa_ac':
                 for i in range(num_ref):
                     if object_cat == 'pipe':
-                        image_path = Path(data_dir) / 'pipe_fryum' / 'test' / 'good' / f'00{i}.png'
+                        good_dir = Path(data_dir) / 'pipe_fryum' / 'test' / 'good'
                     else:
-                        image_path = Path(data_dir) / object_cat / 'test' / 'good' / f'00{i}.png'
+                        good_dir = Path(data_dir) / object_cat / 'test' / 'good'
+                    image_files = [f for f in os.listdir(good_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                    if not image_files:
+                        raise FileNotFoundError(f"No valid images found in {good_dir}")
+                    image_path = good_dir / image_files[0]
                     image = Image.open(image_path)
                     image = image.resize((image_size, image_size))
                     if model_type == 'gpt':
@@ -461,7 +467,7 @@ def main():
         hf_token = os.getenv("llama_access")
         model = MllamaForConditionalGeneration.from_pretrained(
           "meta-llama/Llama-3.2-11B-Vision-Instruct",
-          torch_dtype = "auto",
+          torch_dtype = torch.float16,
           device_map = "auto",
           token = hf_token
         )
@@ -471,7 +477,7 @@ def main():
         hf_token = os.getenv("llama_access")
         model = LlavaNextForConditionalGeneration.from_pretrained(
             "llava-hf/llava-v1.6-mistral-7b-hf",
-            torch_dtype = "auto",
+            torch_dtype = torch.float16,
             device_map = "auto",
             token = hf_token
         )
