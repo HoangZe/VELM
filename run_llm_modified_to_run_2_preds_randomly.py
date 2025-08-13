@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import torch
 import random  # Added for random selection
 from openai import OpenAI
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path
 from collections import defaultdict  # Moved import to top
@@ -127,6 +127,71 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
     inputs = inputs.to(device)
 
     generated_ids = model.generate(**inputs, max_new_tokens=128)
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    output_text = processor.batch_decode(
+        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )
+    return output_text
+def get_llama_output(
+    model: Any,
+    processor: Any,
+    input_imgs: List[Image.Image],
+    input_txt: str,
+    heatmap_mode: str
+) -> List[str]:
+    if heatmap_mode == "none":
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": input_imgs[0]},
+                    {"type": "image", "image": input_imgs[1]},
+                    {"type": "text", "text": input_txt},
+                ],
+            }
+        ]
+        image_inputs = [input_imgs[0], input_imgs[1]]
+    else:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": input_imgs[0]},
+                    {"type": "image", "image": input_imgs[1]},
+                    {"type": "image", "image": input_imgs[2]},
+                    {"type": "text", "text": input_txt},
+                ],
+            }
+        ]
+        image_inputs = [input_imgs[0], input_imgs[1], input_imgs[2]]
+
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+    # Build tensors (IMPORTANT: use keyword args + return_tensors)
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs = inputs.to(device)
+
+    pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
+    generated_ids = model.generate(**inputs, max_new_tokens=128, pad_token_id=pad_id)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -307,10 +372,14 @@ def run_llm(
             total_tokens += usage.total_tokens
             print(f"{key}: {response} (Tokens used: {usage.total_tokens})")
             predictions[key] = response
-        else:
+        elif model_type == 'qwen':
             qwen_output = get_qwen_output(model, processor, images, text, heatmap_mode)
             print(f"{key}: {qwen_output[0]}")
             predictions[key] = qwen_output[0]
+        elif model_type == 'llama':
+            llama_output = get_llama_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {llama_output[0]}")
+            predictions[key] = llama_output[0]
     
     if model_type == 'gpt':
         print(f"Total tokens used: {total_tokens}")
@@ -328,7 +397,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Run LLM model for anomaly detection.")
-    parser.add_argument('--model', type=str, choices=['gpt', 'qwen'],
+    parser.add_argument('--model', type=str, choices=['gpt', 'qwen', 'llama'],
                         default='gpt', help='Model to use (gpt or qwen).')
     parser.add_argument('--gpt_model', type=str, choices=['gpt-4o', 'gpt-4o-mini'],
                         default='gpt-4o', help='GPT model to use (only applicable if model=gpt).')
@@ -351,11 +420,21 @@ def main():
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         model = None
         processor = None
-    else:
+    elif args.model == 'qwen':
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2.5-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
         )
         processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+        client = None
+    elif args.model == 'llama':
+        hf_token = os.getenv("llama_access")
+        model = MllamaForConditionalGeneration.from_pretrained(
+            "meta-llama/Llama-3.2-11B-Vision-Instruct",
+            torch_dtype = torch.bfloat16,
+            device_map = "auto",
+            token = hf_token,
+        )
+        processor = AutoProcessor.from_pretrained("meta-llama/Llama-3.2-11B-Vision-Instruct", token = hf_token)
         client = None
     
     run_llm(

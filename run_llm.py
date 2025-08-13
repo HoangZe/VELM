@@ -154,6 +154,10 @@ def get_llama_output(
     if heatmap_mode == "none":
         messages = [
             {
+                "role": "system",
+                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+            },
+            {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": input_imgs[0]},
@@ -162,8 +166,13 @@ def get_llama_output(
                 ],
             }
         ]
+        image_inputs = [input_imgs[0], input_imgs[1]]
     else:
         messages = [
+            {
+                "role": "system",
+                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+            },
             {
                 "role": "user",
                 "content": [
@@ -174,17 +183,16 @@ def get_llama_output(
                 ],
             }
         ]
+        image_inputs = [input_imgs[0], input_imgs[1], input_imgs[2]]
 
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    image_inputs, video_inputs = process_vision_info(messages)
 
     # Build tensors (IMPORTANT: use keyword args + return_tensors)
     inputs = processor(
         text=[text],
         images=image_inputs,
-        videos=video_inputs,
         padding=True,
         return_tensors="pt",
     )
@@ -467,7 +475,7 @@ def main():
         hf_token = os.getenv("llama_access")
         model = MllamaForConditionalGeneration.from_pretrained(
           "meta-llama/Llama-3.2-11B-Vision-Instruct",
-          torch_dtype = torch.float16,
+          torch_dtype = torch.bfloat16,
           device_map = "auto",
           token = hf_token
         )
@@ -477,7 +485,7 @@ def main():
         hf_token = os.getenv("llama_access")
         model = LlavaNextForConditionalGeneration.from_pretrained(
             "llava-hf/llava-v1.6-mistral-7b-hf",
-            torch_dtype = torch.float16,
+            torch_dtype = torch.bfloat16,
             device_map = "auto",
             token = hf_token
         )
