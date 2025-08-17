@@ -134,6 +134,7 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )
     return output_text
+
 def get_llama_output(
     model: Any,
     processor: Any,
@@ -240,7 +241,7 @@ def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image],
 
     inputs = processor(
         text = [text],
-        image = image_inputs,
+        images = image_inputs,
         padding = True,
         return_tensors = "pt",
     )
@@ -505,7 +506,7 @@ def main():
         client = None
     elif args.model == 'gemma':
         hf_token = os.getenv("llama_access")
-        model = MllamaForConditionalGeneration.from_pretrained(
+        model = Gemma3ForConditionalGeneration.from_pretrained(
             "google/gemma-3-12b-it",
             torch_dtype = torch.bfloat16,
             device_map = "auto",

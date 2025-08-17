@@ -303,9 +303,11 @@ def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image],
 
     inputs = processor(
         text = [text],
-        image = image_inputs,
+        images = image_inputs,
         padding = True,
         return_tensors = "pt",
+        add_special_tokens = False,
+        do_pan_and_scan = True,
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -315,9 +317,8 @@ def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image],
     generated_ids = model.generate(**inputs,
                                    max_new_tokens=16,
                                    pad_token_id=pad_id,
-                                   do_sample = False,
-                                   temperature = 0.0,
-                                   top_p = 1.0,)
+                                   temperature=0.0,
+                                   do_sample = False,)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
