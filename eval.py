@@ -291,7 +291,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Evaluate model predictions for anomaly detection')
     parser.add_argument('--dataset', type=str, choices=['mvtec_ad', 'mvtec_ac', 'visa_ac'], 
                         default='mvtec_ac', help='Dataset to evaluate')
-    parser.add_argument('--model', type=str, choices=['gpt-4o', 'gpt-4o-mini', 'qwen', 'llama', 'llava'],
+    parser.add_argument('--model', type=str, choices=['gpt-4o', 'gpt-4o-mini', 'qwen', 'llama', 'llava', 'gemma'],
                         default='gpt-4o', help='Model type used for predictions')
     parser.add_argument('--heatmap_mode', type=str, choices=['contour', 'none'],
                         default='contour', help='Heatmap visualization mode')

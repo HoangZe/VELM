@@ -15,7 +15,7 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 import torch
 from openai import OpenAI
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor, Gemma3ForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path
 
@@ -86,7 +86,7 @@ def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], i
 
     Args:
         model: Qwen2.5-VL model
-        processor: Qwen2-VL processor
+        processor: Qwen2.5-VL processor
         input_imgs: List of PIL Images
         input_txt: Prompt text
         heatmap_mode: Heatmap visualization mode
@@ -263,6 +263,69 @@ def get_llava_output(model, processor, input_imgs, input_txt, heatmap_mode):
     )
     return output_text
 
+def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image], input_txt: str, heatmap_mode: str) -> List[str]:
+    if heatmap_mode == "none":
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": input_imgs[0]},
+                    {"type": "image", "image": input_imgs[1]},
+                    {"type": "text", "text": input_txt},
+                ],
+            }
+        ]
+        image_inputs = [input_imgs[0], input_imgs[1]]
+    else:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": input_imgs[0]},
+                    {"type": "image", "image": input_imgs[1]},
+                    {"type": "image", "image": input_imgs[2]},
+                    {"type": "text", "text": input_txt},
+                ],
+            }
+        ]
+        image_inputs = [input_imgs[0], input_imgs[1], input_imgs[2]]
+
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True)
+
+    inputs = processor(
+        text = [text],
+        image = image_inputs,
+        padding = True,
+        return_tensors = "pt",
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs = inputs.to(device)
+
+    pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
+    generated_ids = model.generate(**inputs,
+                                   max_new_tokens=16,
+                                   pad_token_id=pad_id,
+                                   do_sample = False,
+                                   temperature = 0.0,
+                                   top_p = 1.0,)
+    generated_ids_trimmed = [
+        out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    output_text = processor.batch_decode(
+        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )
+    return output_text
+
 def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
     """
     Get configuration for a specific dataset.
@@ -414,6 +477,10 @@ def run_llm(
             llava_output = get_llava_output(model, processor, images, text, heatmap_mode)
             print(f"{key}: {llava_output[0]}")
             predictions[key] = llava_output[0]
+        elif model_type == 'gemma': #gemma
+            gemma_output = get_gemma_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {gemma_output[0]}")
+            predictions[key] = gemma_output[0]
 
 
     # Print token usage for GPT model
@@ -436,8 +503,8 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Run LLM model for anomaly detection.")
-    parser.add_argument('--model', type=str, choices=['gpt', 'qwen', 'llama', 'llava'],
-                        default='gpt', help='Model to use (gpt, qwen, llama, or llava).')
+    parser.add_argument('--model', type=str, choices=['gpt', 'qwen', 'llama', 'llava', 'gemma'],
+                        default='gpt', help='Model to use (gpt, qwen, llama, or llava, or gemma).')
     parser.add_argument('--gpt_model', type=str, choices=['gpt-4o', 'gpt-4o-mini'],
                         default='gpt-4o', help='GPT model to use (only applicable if model=gpt).')
     parser.add_argument('--dataset', type=str, choices=['mvtec_ad', 'mvtec_ac', 'visa_ac'],
@@ -490,6 +557,19 @@ def main():
             token = hf_token
         )
         processor = LlavaNextProcessor.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", token = hf_token)
+        client = None
+    elif args.model == 'gemma': #gemma
+        hf_token = os.getenv("llama_access")
+        model = Gemma3ForConditionalGeneration.from_pretrained(
+            "google/gemma-3-12b-it",
+            torch_dtype = torch.bfloat16,
+            device_map = "auto",
+            token = hf_token,
+        )
+        processor = AutoProcessor.from_pretrained(
+            "google/gemma-3-12b-it",
+            token = hf_token,
+        )
         client = None
     
     # Run the LLM
