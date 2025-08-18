@@ -206,7 +206,9 @@ def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image],
         messages = [
             {
                 "role": "system",
-                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                "content": [
+                    {"type": "text", "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."}
+                ],
             },
             {
                 "role": "user",
@@ -222,7 +224,9 @@ def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image],
         messages = [
             {
                 "role": "system",
-                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                "content": [
+                    {"type": "text", "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."}
+                ],
             },
             {
                 "role": "user",
