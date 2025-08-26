@@ -1,8 +1,17 @@
 """
-Run LLM models for anomaly classification.
+Run multimodal LLMs for binary anomaly detection.
 
-This script supports multiple LLM backends (GPT-4o, GPT-4o-mini, Qwen2.5-VL-Instruct, and LLaMa-3.2-Vision-Instruct, and LLaVa-1.6-Mistral-7B) for anomaly classification
-with various heatmap visualization modes.
+This script provides a simplified inference pipeline for determining whether a
+query image contains any anomaly compared to a reference (good) image.  It
+supports several multimodal large language model backends including OpenAI
+GPT‑4o, Qwen2.5‑VL, LLaMa‑3.2‑Vision‑Instruct, Llava‑1.6‑Mistral and
+Gemma‑3.  The original VELM framework used a two‑stage approach with a
+vision expert producing heatmaps and a language model performing
+multi‑class classification.  Here we instead pass only the reference and
+query images to the LMM together with a simple binary detection prompt.
+The model is expected to answer ``anomalous`` or ``normal``.
+Heatmaps and contour overlays are no longer supported; the ``heatmap_mode``
+argument is retained for API compatibility but ignored.
 """
 
 import os
@@ -36,105 +45,100 @@ def encode_image(image: Image.Image) -> str:
     return img_str
 
 
-def get_gpt_output(client: OpenAI, images: List[str], text: str, model_name: str, heatmap_mode: str) -> Tuple[str, Dict[str, int]]:
+def get_gpt_output(
+    client: OpenAI,
+    images: List[str],
+    text: str,
+    model_name: str,
+    heatmap_mode: str,
+) -> Tuple[str, Dict[str, int]]:
     """
-    Get output from GPT model.
+    Query an OpenAI GPT model with a pair of images and a text prompt.
+
+    The GPT API uses a chat format where each message may contain multiple
+    images.  For binary anomaly detection only the first two images in
+    ``images`` are considered: the reference (good) image and the query
+    image.  The ``heatmap_mode`` parameter is accepted for backwards
+    compatibility but ignored.
 
     Args:
-        client: OpenAI client
-        images: List of base64 encoded images
-        text: Prompt text
-        model_name: Name of the GPT model to use
+        client: OpenAI client instance.
+        images: List of base64‑encoded images.  Only the first two entries
+            are used.
+        text: Prompt text instructing the model to respond ``anomalous``
+            or ``normal``.
+        model_name: Name of the GPT model variant to use.
+        heatmap_mode: Deprecated; retained to avoid breaking existing calls.
 
     Returns:
-        Tuple[str, Dict[str, int]]: Model output and token usage
+        Tuple[str, Dict[str, int]]: The model's text response and token usage
+            statistics.
     """
-    if heatmap_mode == "none":
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{images[0]}"}},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{images[1]}"}},
-                ],
-            }
-        ]
-    else:
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{images[0]}"}},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{images[1]}"}},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{images[2]}"}},
-                ],
-            }
-        ]
+    # Ensure we have at least two images; ignore extras
+    ref_img, query_img = images[:2]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{ref_img}"}},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{query_img}"}},
+            ],
+        }
+    ]
     response = client.chat.completions.create(
         model=model_name,
         messages=messages,
-        temperature=0.0
+        temperature=0.0,
     )
     return response.choices[0].message.content, response.usage
 
 
-def get_qwen_output(model: Any, processor: Any, input_imgs: List[Image.Image], input_txt: str, heatmap_mode: str) -> List[str]:
+def get_qwen_output(
+    model: Any,
+    processor: Any,
+    input_imgs: List[Image.Image],
+    input_txt: str,
+    heatmap_mode: str,
+) -> List[str]:
     """
-    Get output from Qwen2.5-VL model.
+    Get output from a Qwen2.5‑VL model for binary anomaly detection.
+
+    Only the first two images in ``input_imgs`` (reference and query) are
+    utilised.  The ``heatmap_mode`` argument is retained for API
+    compatibility but ignored.  The function constructs a chat message
+    accordingly and invokes the model.
 
     Args:
-        model: Qwen2.5-VL model
-        processor: Qwen2.5-VL processor
-        input_imgs: List of PIL Images
-        input_txt: Prompt text
-        heatmap_mode: Heatmap visualization mode
+        model: Loaded Qwen2.5‑VL model.
+        processor: Qwen processor used to prepare inputs.
+        input_imgs: List of PIL images (reference followed by query).
+        input_txt: Prompt text instructing the model.
+        heatmap_mode: Ignored parameter.
 
     Returns:
-        List[str]: Model output
+        List[str]: Decoded model outputs.
     """
-    # Multiple image message
-    if heatmap_mode == "none":
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-    else:
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "image", "image": input_imgs[2]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-
-    # Preparation for inference
+    imgs = input_imgs[:2]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": imgs[0]},
+                {"type": "image", "image": imgs[1]},
+                {"type": "text", "text": input_txt},
+            ],
+        }
+    ]
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     image_inputs, video_inputs = process_vision_info(messages)
     inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
+        text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt"
     )
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
-
     generated_ids = model.generate(**inputs, max_new_tokens=128)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -149,59 +153,58 @@ def get_llama_output(
     processor: Any,
     input_imgs: List[Image.Image],
     input_txt: str,
-    heatmap_mode: str
+    heatmap_mode: str,
 ) -> List[str]:
-    if heatmap_mode == "none":
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-        image_inputs = [input_imgs[0], input_imgs[1]]
-    else:
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "image", "image": input_imgs[2]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-        image_inputs = [input_imgs[0], input_imgs[1], input_imgs[2]]
+    """
+    Invoke a LLaMa‑3.2‑Vision‑Instruct model for binary anomaly detection.
 
+    Only the first two images (reference and query) are considered.  A
+    system instruction is prepended to enforce that the model replies with
+    exactly one of the expected labels.  The ``heatmap_mode`` argument is
+    ignored and retained solely for compatibility.
+
+    Args:
+        model: The LLaMa model instance.
+        processor: Associated processor.
+        input_imgs: List of PIL images (first is reference, second is query).
+        input_txt: Prompt text.
+        heatmap_mode: Ignored parameter.
+
+    Returns:
+        List[str]: Decoded model responses.
+    """
+    imgs = input_imgs[:2]
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": imgs[0]},
+                {"type": "image", "image": imgs[1]},
+                {"type": "text", "text": input_txt},
+            ],
+        },
+    ]
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-
-    # Build tensors (IMPORTANT: use keyword args + return_tensors)
     inputs = processor(
-        text=[text],
-        images=image_inputs,
-        padding=True,
-        return_tensors="pt",
+        text=[text], images=imgs, padding=True, return_tensors="pt"
     )
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
-
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
-    generated_ids = model.generate(**inputs, max_new_tokens=128, pad_token_id=pad_id)
+    generated_ids = model.generate(
+        **inputs, max_new_tokens=128, pad_token_id=pad_id
+    )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -210,51 +213,63 @@ def get_llama_output(
     )
     return output_text
 
-def get_llava_output(model, processor, input_imgs, input_txt, heatmap_mode):
-    # Build messages + pick images in the same order you do elsewhere
-    if heatmap_mode == "none":
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-    else:
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "image", "image": input_imgs[2]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
+def get_llava_output(
+    model: Any,
+    processor: Any,
+    input_imgs: List[Image.Image],
+    input_txt: str,
+    heatmap_mode: str,
+) -> List[str]:
+    """
+    Query a Llava‑1.6‑Mistral‑7B model for binary anomaly detection.
 
+    Only the first two images (reference and query) are used.  The
+    ``heatmap_mode`` argument is ignored.  A single user message is
+    constructed containing both images and the text prompt.
+
+    Args:
+        model: Llava model instance.
+        processor: Llava processor instance.
+        input_imgs: List of PIL images (reference and query).
+        input_txt: Prompt text.
+        heatmap_mode: Ignored parameter.
+
+    Returns:
+        List[str]: Decoded model outputs.
+    """
+    imgs = input_imgs[:2]
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": imgs[0]},
+                {"type": "image", "image": imgs[1]},
+                {"type": "text", "text": input_txt},
+            ],
+        }
+    ]
     text = processor.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
     image_inputs, video_inputs = process_vision_info(messages)
-
-    # Build tensors (IMPORTANT: use keyword args + return_tensors)
     inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
+        text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt"
     )
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
-
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
-    generated_ids = model.generate(**inputs, max_new_tokens=128, pad_token_id=pad_id)
+    generated_ids = model.generate(
+        **inputs, max_new_tokens=128, pad_token_id=pad_id
+    )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -263,66 +278,71 @@ def get_llava_output(model, processor, input_imgs, input_txt, heatmap_mode):
     )
     return output_text
 
-def get_gemma_output (model: Any, processor: Any, input_imgs: List[Image.Image], input_txt: str, heatmap_mode: str) -> List[str]:
-    if heatmap_mode == "none":
-        messages = [
-            {
-                "role": "system",
-                "content": [
-                    {"type": "text", "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."}
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-        image_inputs = [input_imgs[0], input_imgs[1]]
-    else:
-        messages = [
-            {
-                "role": "system",
-                "content": [
-                    {"type": "text", "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."}
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": input_imgs[0]},
-                    {"type": "image", "image": input_imgs[1]},
-                    {"type": "image", "image": input_imgs[2]},
-                    {"type": "text", "text": input_txt},
-                ],
-            }
-        ]
-        image_inputs = [input_imgs[0], input_imgs[1], input_imgs[2]]
+def get_gemma_output(
+    model: Any,
+    processor: Any,
+    input_imgs: List[Image.Image],
+    input_txt: str,
+    heatmap_mode: str,
+) -> List[str]:
+    """
+    Call a Gemma‑3 model for binary anomaly detection.
 
+    Similar to other backends, only the first two images (reference and query)
+    are passed to the model.  A system prompt constrains the response to
+    exactly one label.  The heatmap mode parameter is ignored.
+
+    Args:
+        model: Gemma‑3 model instance.
+        processor: Corresponding processor.
+        input_imgs: List of PIL images (first is reference, second is query).
+        input_txt: Prompt text instructing the model.
+        heatmap_mode: Ignored parameter for compatibility.
+
+    Returns:
+        List[str]: Decoded outputs.
+    """
+    imgs = input_imgs[:2]
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": imgs[0]},
+                {"type": "image", "image": imgs[1]},
+                {"type": "text", "text": input_txt},
+            ],
+        },
+    ]
     text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True)
-
-    inputs = processor(
-        text = [text],
-        images = image_inputs,
-        padding = True,
-        return_tensors = "pt",
-        add_special_tokens = False,
-        do_pan_and_scan = True,
+        messages, tokenize=False, add_generation_prompt=True
     )
-
+    inputs = processor(
+        text=[text],
+        images=imgs,
+        padding=True,
+        return_tensors="pt",
+        add_special_tokens=False,
+        do_pan_and_scan=True,
+    )
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
-
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
-    generated_ids = model.generate(**inputs,
-                                   max_new_tokens=16,
-                                   pad_token_id=pad_id,
-                                   temperature=0.0,
-                                   do_sample = False,)
+    generated_ids = model.generate(
+        **inputs,
+        max_new_tokens=16,
+        pad_token_id=pad_id,
+        temperature=0.0,
+        do_sample=False,
+    )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -370,214 +390,206 @@ def run_llm(
     client: Optional[OpenAI] = None,
     model: Optional[Any] = None,
     processor: Optional[Any] = None,
-    gpt_model_name: str = "gpt-4o"
+    gpt_model_name: str = "gpt-4o",
 ) -> Dict[str, str]:
     """
-    Run LLM model for anomaly detection.
+    Run a multimodal LLM for binary anomaly detection.
+
+    For each entry in ``prompts_dict`` this function loads a reference
+    image from the dataset (assumed to be in ``test/good``) and the query
+    image specified in the prompts dictionary.  It resizes both images to
+    ``image_size`` and passes them to the selected model backend along with
+    the prompt text.  The backend should return either ``anomalous`` or
+    ``normal``.  Heatmap functionality from the original VELM framework is
+    disabled; the ``heatmap_mode`` argument is ignored.
 
     Args:
-        model_type: Type of model to use ('gpt-4o', 'gpt-4o-mini' or 'qwen' or 'llama' or 'llava')
-        prompts_dict: Dictionary of prompts
-        data_dir: Directory containing the dataset
-        image_size: Size to resize images to
-        num_ref: Number of reference images to use
-        heatmap_mode: Heatmap visualization mode
-        dataset: Dataset name
-        client: OpenAI client (for GPT model)
-        model: Qwen model (for Qwen model)
-        processor: Qwen processor (for Qwen model)
-        gpt_model_name: Name of the GPT model to use (for GPT model)
+        model_type: One of 'gpt', 'qwen', 'llama', 'llava' or 'gemma'.
+        prompts_dict: Mapping from sample keys to dictionaries containing
+            'image' (path to the query image) and 'text' (prompt text).
+        data_dir: Root of the dataset (e.g. datasets/mvtec_ad).
+        image_size: Side length to resize images to before inference.
+        num_ref: Number of reference images to use.  Only the first is used.
+        heatmap_mode: Ignored parameter, kept for backwards compatibility.
+        dataset: Dataset name ('mvtec_ad', 'mvtec_ac', 'visa_ac').
+        client: OpenAI client instance when model_type=='gpt'.
+        model: Model instance for HF backends.
+        processor: Processor associated with the HF model.
+        gpt_model_name: Name of the GPT variant when model_type=='gpt'.
 
     Returns:
-        Dict[str, str]: Dictionary of predictions
+        Dict[str, str]: Dictionary mapping sample keys to raw model responses.
     """
-    predictions = {}
+    predictions: Dict[str, str] = {}
     total_tokens = 0
-
-    # Loop over the prompts
     for key, value in tqdm(prompts_dict.items()):
-        images = []
+        images: List[Any] = []
+        # Extract the object category (everything before the first underscore)
         object_cat = key.split('_')[0]
-
-        # Load reference image
-        if num_ref != 0:
-            if dataset == 'mvtec_ad' or dataset == 'mvtec_ac':
-                for i in range(num_ref):
-                    if object_cat == 'metal':
-                        image_path = Path(data_dir) / 'metal_nut' / 'test' / 'good' / f'00{i}.png'
-                    else:
-                        image_path = Path(data_dir) / object_cat / 'test' / 'good' / f'00{i}.png'
-                    image = Image.open(image_path)
-                    image = image.resize((image_size, image_size))  # Resize the image
-                    if model_type == 'gpt':
-                        images.append(encode_image(image))
-                    else:
-                        images.append(image)
-            elif dataset == 'visa_ac':
-                for i in range(num_ref):
-                    if object_cat == 'pipe':
-                        good_dir = Path(data_dir) / 'pipe_fryum' / 'test' / 'good'
-                    else:
-                        good_dir = Path(data_dir) / object_cat / 'test' / 'good'
-                    image_files = [f for f in os.listdir(good_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
-                    if not image_files:
-                        raise FileNotFoundError(f"No valid images found in {good_dir}")
-                    image_path = good_dir / image_files[0]
-                    image = Image.open(image_path)
-                    image = image.resize((image_size, image_size))
-                    if model_type == 'gpt':
-                        images.append(encode_image(image))
-                    else:
-                        images.append(image)
-
-        # Define the path to the image file
-        image_path = value['image']
-        query_image = Image.open(image_path)
-        query_image = query_image.resize((image_size, image_size))
-
-        if model_type == 'gpt':
-            images.append(encode_image(query_image))
-        else:
-            images.append(query_image)
-
-        defect_class = key.split('_')[1:-1]
-        defect_class = '_'.join(defect_class)
-
-        # Load the heatmap based on the heatmap mode
-        if heatmap_mode == "contour":
-            if object_cat == 'metal':
-                object_cat = 'metal_nut'
-                defect_class = defect_class[4:]
-            if object_cat == 'pipe':
-                object_cat = 'pipe_fryum'
-                defect_class = defect_class[6:]
-
-            heatmap_dir = Path.cwd() / f'contour_gt_{dataset}'
-            heatmap_path = heatmap_dir / object_cat / 'test' / defect_class / f'{key.split("_")[-1]}.png'
-            heatmap = Image.open(heatmap_path)
-            heatmap = heatmap.resize((image_size, image_size))
+        # Load reference image from test/good folder
+        if num_ref > 0:
+            # Determine the directory containing good images for this category
+            if dataset in ('mvtec_ad', 'mvtec_ac'):
+                ref_cat = 'metal_nut' if object_cat == 'metal' else object_cat
+                ref_dir = data_dir / ref_cat / 'test' / 'good'
+            else:  # visa_ac
+                ref_cat = 'pipe_fryum' if object_cat == 'pipe' else object_cat
+                ref_dir = data_dir / ref_cat / 'test' / 'good'
+            ref_files = [f for f in os.listdir(ref_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+            if not ref_files:
+                raise FileNotFoundError(f"No valid reference images found in {ref_dir}")
+            ref_path = ref_dir / ref_files[0]
+            ref_img = Image.open(ref_path).convert('RGB').resize((image_size, image_size))
             if model_type == 'gpt':
-                images.append(encode_image(heatmap))
+                images.append(encode_image(ref_img))
             else:
-                images.append(heatmap)
-
-        # Get the text
-        text = value['text']
-
-        # Call the appropriate model
+                images.append(ref_img)
+        # Load query image from prompts_dict
+        query_path = value['image']
+        query_img = Image.open(query_path).convert('RGB').resize((image_size, image_size))
         if model_type == 'gpt':
-            response, usage = get_gpt_output(client, images, text, gpt_model_name)
+            images.append(encode_image(query_img))
+        else:
+            images.append(query_img)
+        # Retrieve prompt text
+        text = value['text']
+        # Invoke appropriate model backend
+        if model_type == 'gpt':
+            response, usage = get_gpt_output(client, images, text, gpt_model_name, heatmap_mode)
             total_tokens += usage.total_tokens
             print(f"{key}: {response} (Tokens used: {usage.total_tokens})")
             predictions[key] = response
-        elif model_type == 'qwen':  # qwen
-            qwen_output = get_qwen_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {qwen_output[0]}")
-            predictions[key] = qwen_output[0]
-        elif model_type == 'llama': #llama
-            llama_output = get_llama_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {llama_output[0]}")
-            predictions[key] = llama_output[0]
-        elif model_type == 'llava': #llava
-            llava_output = get_llava_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {llava_output[0]}")
-            predictions[key] = llava_output[0]
-        elif model_type == 'gemma': #gemma
-            gemma_output = get_gemma_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {gemma_output[0]}")
-            predictions[key] = gemma_output[0]
-
-
-    # Print token usage for GPT model
+        elif model_type == 'qwen':
+            out = get_qwen_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {out[0]}")
+            predictions[key] = out[0]
+        elif model_type == 'llama':
+            out = get_llama_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {out[0]}")
+            predictions[key] = out[0]
+        elif model_type == 'llava':
+            out = get_llava_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {out[0]}")
+            predictions[key] = out[0]
+        elif model_type == 'gemma':
+            out = get_gemma_output(model, processor, images, text, heatmap_mode)
+            print(f"{key}: {out[0]}")
+            predictions[key] = out[0]
+    # Summarise token usage for GPT models
     if model_type == 'gpt':
         print(f"Total tokens used: {total_tokens}")
-        # Estimate the cost
-        cost_estimate = (total_tokens / 1e6) * 2.5  # assuming $2.5 per 1M tokens
+        cost_estimate = (total_tokens / 1e6) * 2.5
         print(f"Estimated cost: ${cost_estimate:.2f}")
-
-    # Save the predictions to a JSON file
+    # Determine save path and persist predictions
     save_path = get_save_path(heatmap_mode, dataset, model_type, gpt_model_name)
     save_json(predictions, save_path)
     print(f"[✓] Predictions saved to: {save_path}")
-
     return predictions
 
 
 def main():
-    """Main function to run the LLM model."""
+    """Entry point for running the binary anomaly detection pipeline."""
     import argparse
-
-    parser = argparse.ArgumentParser(description="Run LLM model for anomaly detection.")
-    parser.add_argument('--model', type=str, choices=['gpt', 'qwen', 'llama', 'llava', 'gemma'],
-                        default='gpt', help='Model to use (gpt, qwen, llama, or llava, or gemma).')
-    parser.add_argument('--gpt_model', type=str, choices=['gpt-4o', 'gpt-4o-mini'],
-                        default='gpt-4o', help='GPT model to use (only applicable if model=gpt).')
-    parser.add_argument('--dataset', type=str, choices=['mvtec_ad', 'mvtec_ac', 'visa_ac'],
-                        default='mvtec_ac', help='Dataset to use.')
-    parser.add_argument('--heatmap_mode', type=str, choices=['contour', 'none'],
-                        default='contour', help='Heatmap visualization mode.')
-    parser.add_argument('--image_size', type=int, default=448,
-                        help='Size to resize images to.')
-    parser.add_argument('--num_ref', type=int, default=1,
-                        help='Number of reference images to use.')
+    parser = argparse.ArgumentParser(
+        description="Run a multimodal LLM for binary anomaly detection."
+    )
+    parser.add_argument(
+        '--model',
+        type=str,
+        choices=['gpt', 'qwen', 'llama', 'llava', 'gemma'],
+        default='gpt',
+        help='Model backend to use.'
+    )
+    parser.add_argument(
+        '--gpt_model',
+        type=str,
+        choices=['gpt-4o', 'gpt-4o-mini'],
+        default='gpt-4o',
+        help='GPT model variant (only when --model=gpt).'
+    )
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        choices=['mvtec_ad', 'mvtec_ac', 'visa_ac'],
+        default='mvtec_ac',
+        help='Dataset to process.'
+    )
+    parser.add_argument(
+        '--image_size',
+        type=int,
+        default=448,
+        help='Resize images to this square dimension.'
+    )
+    parser.add_argument(
+        '--num_ref',
+        type=int,
+        default=1,
+        help='Number of reference images to use (only the first is used).'
+    )
+    # Retain heatmap_mode for backwards compatibility but default to 'none'
+    parser.add_argument(
+        '--heatmap_mode',
+        type=str,
+        choices=['contour', 'none'],
+        default='none',
+        help='Heatmap mode (ignored in binary detection).'
+    )
     args = parser.parse_args()
-
-    # Get dataset configuration
+    # Retrieve dataset directory and prompts file
     data_dir, json_file_path = get_dataset_config(args.dataset)
-
-    # Load the prompts from the JSON file
+    # Load prompts
     prompts_dict = load_json(json_file_path)
-
-    # Initialize model based on type
+    # Initialise backend model/processor
     if args.model == 'gpt':
-        # Set OpenAI API key
         load_dotenv()
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         model = None
         processor = None
-    elif args.model == 'qwen':  # qwen
-        # Load the model on the available device(s)
+    elif args.model == 'qwen':
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             "Qwen/Qwen2.5-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
         )
         processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
         client = None
-    elif args.model == 'llama': #llama
-        # Load the llama 3.2 model from available devices
+    elif args.model == 'llama':
         hf_token = os.getenv("llama_access")
         model = MllamaForConditionalGeneration.from_pretrained(
-          "meta-llama/Llama-3.2-11B-Vision-Instruct",
-          torch_dtype = torch.bfloat16,
-          device_map = "auto",
-          token = hf_token
+            "meta-llama/Llama-3.2-11B-Vision-Instruct",
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            token=hf_token
         )
-        processor = AutoProcessor.from_pretrained("meta-llama/Llama-3.2-11B-Vision-Instruct", token = hf_token)
+        processor = AutoProcessor.from_pretrained(
+            "meta-llama/Llama-3.2-11B-Vision-Instruct", token=hf_token
+        )
         client = None
-    elif args.model == 'llava': #llava
+    elif args.model == 'llava':
         hf_token = os.getenv("llama_access")
         model = LlavaNextForConditionalGeneration.from_pretrained(
             "llava-hf/llava-v1.6-mistral-7b-hf",
-            torch_dtype = torch.bfloat16,
-            device_map = "auto",
-            token = hf_token
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            token=hf_token
         )
-        processor = LlavaNextProcessor.from_pretrained("llava-hf/llava-v1.6-mistral-7b-hf", token = hf_token)
+        processor = LlavaNextProcessor.from_pretrained(
+            "llava-hf/llava-v1.6-mistral-7b-hf", token=hf_token
+        )
         client = None
-    elif args.model == 'gemma': #gemma
+    elif args.model == 'gemma':
         hf_token = os.getenv("llama_access")
         model = Gemma3ForConditionalGeneration.from_pretrained(
             "google/gemma-3-12b-it",
-            torch_dtype = torch.bfloat16,
-            device_map = "auto",
-            token = hf_token,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            token=hf_token
         )
         processor = AutoProcessor.from_pretrained(
-            "google/gemma-3-12b-it",
-            token = hf_token,
+            "google/gemma-3-12b-it", token=hf_token
         )
         client = None
-    
-    # Run the LLM
+    else:
+        raise ValueError(f"Unsupported model type: {args.model}")
+    # Execute inference
     run_llm(
         model_type=args.model,
         prompts_dict=prompts_dict,
@@ -589,9 +601,8 @@ def main():
         client=client,
         model=model,
         processor=processor,
-        gpt_model_name=args.gpt_model if args.model == 'gpt' else None
+        gpt_model_name=args.gpt_model if args.model == 'gpt' else None,
     )
-    
     print("Done")
 
 
