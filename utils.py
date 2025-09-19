@@ -1,15 +1,41 @@
-"""
-Utility functions for LLM-based Anomaly Classification.
-
-This module provides common functionality used across multiple scripts in the Repo.
-"""
-
 import os
 import json
 import logging
 from pathlib import Path
 import yaml
 from typing import Dict, List, Union, Any
+import numpy as np
+import re, json
+
+# module logger used by helpers (e.g., load_config)
+logger = logging.getLogger(__name__)
+
+def parse_llm_json(raw: str) -> Dict:
+    """
+    Strip code fences and parse the LLM's JSON; minimal schema checks.
+    """
+    cleaned = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+    obj = json.loads(cleaned)
+    # normalize minimal schema
+    if "label" not in obj:
+        raise ValueError("Missing 'label' in LLM output.")
+    if obj["label"] not in ("normal","anomalous"):
+        raise ValueError("Label must be 'normal' or 'anomalous'.")
+    if obj["label"] == "anomalous":
+        obj.setdefault("regions", [])
+    return obj
+
+def scale_points_norm_to_px(points: List[Dict], W: int, H: int, cap: int=10, allow_empty: bool=False) -> np.ndarray:
+    if (not points) and allow_empty:
+        return np.zeros((0,2), dtype=np.float32)
+    pts = []
+    for p in points[:cap]:
+        x = float(p["x"]) * W
+        y = float(p["y"]) * H
+        pts.append([x, y])
+    if not pts and not allow_empty:
+        raise ValueError("No points provided.")
+    return np.array(pts, dtype=np.float32)
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
     """

@@ -1,19 +1,3 @@
-"""
-Run multimodal LLMs for binary anomaly detection.
-
-This script provides a simplified inference pipeline for determining whether a
-query image contains any anomaly compared to a reference (good) image.  It
-supports several multimodal large language model backends including OpenAI
-GPT‑4o, Qwen2.5‑VL, LLaMa‑3.2‑Vision‑Instruct, Llava‑1.6‑Mistral and
-Gemma‑3.  The original VELM framework used a two‑stage approach with a
-vision expert producing heatmaps and a language model performing
-multi‑class classification.  Here we instead pass only the reference and
-query images to the LMM together with a simple binary detection prompt.
-The model is expected to answer ``anomalous`` or ``normal``.
-Heatmaps and contour overlays are no longer supported; the ``heatmap_mode``
-argument is retained for API compatibility but ignored.
-"""
-
 import os
 import base64
 from pathlib import Path
@@ -23,10 +7,12 @@ from PIL import Image
 from tqdm import tqdm
 from dotenv import load_dotenv
 import torch
+import numpy as np
 from openai import OpenAI
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor, Gemma3ForConditionalGeneration
 from qwen_vl_utils import process_vision_info
-from utils import load_json, save_json, get_save_path
+from utils import load_json, save_json, get_save_path, parse_llm_json
+from sam_adapter import Sam2Adapter
 
 
 def encode_image(image: Image.Image) -> str:
@@ -155,24 +141,6 @@ def get_llama_output(
     input_txt: str,
     heatmap_mode: str,
 ) -> List[str]:
-    """
-    Invoke a LLaMa‑3.2‑Vision‑Instruct model for binary anomaly detection.
-
-    Only the first two images (reference and query) are considered.  A
-    system instruction is prepended to enforce that the model replies with
-    exactly one of the expected labels.  The ``heatmap_mode`` argument is
-    ignored and retained solely for compatibility.
-
-    Args:
-        model: The LLaMa model instance.
-        processor: Associated processor.
-        input_imgs: List of PIL images (first is reference, second is query).
-        input_txt: Prompt text.
-        heatmap_mode: Ignored parameter.
-
-    Returns:
-        List[str]: Decoded model responses.
-    """
     imgs = input_imgs[:2]
     messages = [
         {
@@ -220,23 +188,6 @@ def get_llava_output(
     input_txt: str,
     heatmap_mode: str,
 ) -> List[str]:
-    """
-    Query a Llava‑1.6‑Mistral‑7B model for binary anomaly detection.
-
-    Only the first two images (reference and query) are used.  The
-    ``heatmap_mode`` argument is ignored.  A single user message is
-    constructed containing both images and the text prompt.
-
-    Args:
-        model: Llava model instance.
-        processor: Llava processor instance.
-        input_imgs: List of PIL images (reference and query).
-        input_txt: Prompt text.
-        heatmap_mode: Ignored parameter.
-
-    Returns:
-        List[str]: Decoded model outputs.
-    """
     imgs = input_imgs[:2]
     messages = [
         {
@@ -285,23 +236,6 @@ def get_gemma_output(
     input_txt: str,
     heatmap_mode: str,
 ) -> List[str]:
-    """
-    Call a Gemma‑3 model for binary anomaly detection.
-
-    Similar to other backends, only the first two images (reference and query)
-    are passed to the model.  A system prompt constrains the response to
-    exactly one label.  The heatmap mode parameter is ignored.
-
-    Args:
-        model: Gemma‑3 model instance.
-        processor: Corresponding processor.
-        input_imgs: List of PIL images (first is reference, second is query).
-        input_txt: Prompt text instructing the model.
-        heatmap_mode: Ignored parameter for compatibility.
-
-    Returns:
-        List[str]: Decoded outputs.
-    """
     imgs = input_imgs[:2]
     messages = [
         {
@@ -391,7 +325,15 @@ def run_llm(
     model: Optional[Any] = None,
     processor: Optional[Any] = None,
     gpt_model_name: str = "gpt-4o",
+    *,
+    task: str = "localize",
+    sam2_repo: str = "facebook/sam2.1-hiera-large",
+    masks_dir: Optional[str] = None,
+    overlays_dir: Optional[str] = None,
+    multimask: bool = False,
+    max_points: int = 10,
 ) -> Dict[str, str]:
+
     """
     Run a multimodal LLM for binary anomaly detection.
 
@@ -421,6 +363,16 @@ def run_llm(
         Dict[str, str]: Dictionary mapping sample keys to raw model responses.
     """
     predictions: Dict[str, str] = {}
+    # SAM-2 (HF) initialization and output dirs 
+    masks_root = overlays_root = None
+    if task == 'localize':
+        sam_adapter = Sam2Adapter(repo_id=sam2_repo)
+        masks_root = Path(masks_dir or f"configs/masks/{dataset}/{model_type}")
+        overlays_root = Path(overlays_dir or f"configs/overlays/{dataset}/{model_type}")
+        masks_root.mkdir(parents=True, exist_ok=True)
+        overlays_root.mkdir(parents=True, exist_ok=True)
+    else:
+        sam_adapter = None
     total_tokens = 0
     for key, value in tqdm(prompts_dict.items()):
         images: List[Any] = []
@@ -453,37 +405,69 @@ def run_llm(
             images.append(query_img)
         # Retrieve prompt text
         text = value['text']
-        # Invoke appropriate model backend
+        # Invoke backend → get raw text (LLM must return strict JSON)
         if model_type == 'gpt':
             response, usage = get_gpt_output(client, images, text, gpt_model_name, heatmap_mode)
             total_tokens += usage.total_tokens
-            print(f"{key}: {response} (Tokens used: {usage.total_tokens})")
-            predictions[key] = response
+            raw_text = response
         elif model_type == 'qwen':
             out = get_qwen_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {out[0]}")
-            predictions[key] = out[0]
+            raw_text = out[0]
         elif model_type == 'llama':
             out = get_llama_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {out[0]}")
-            predictions[key] = out[0]
+            raw_text = out[0]
         elif model_type == 'llava':
             out = get_llava_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {out[0]}")
-            predictions[key] = out[0]
+            raw_text = out[0]
         elif model_type == 'gemma':
             out = get_gemma_output(model, processor, images, text, heatmap_mode)
-            print(f"{key}: {out[0]}")
-            predictions[key] = out[0]
-    # Summarise token usage for GPT models
-    if model_type == 'gpt':
-        print(f"Total tokens used: {total_tokens}")
-        cost_estimate = (total_tokens / 1e6) * 2.5
-        print(f"Estimated cost: ${cost_estimate:.2f}")
-    # Determine save path and persist predictions
-    save_path = get_save_path(heatmap_mode, dataset, model_type, gpt_model_name)
-    save_json(predictions, save_path)
-    print(f"[✓] Predictions saved to: {save_path}")
+            raw_text = out[0]
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+
+        print(f"{key}: {raw_text}")
+
+        # Parse JSON; in binary mode or 'normal' label, store as-is
+        obj = parse_llm_json(raw_text)
+        if task == 'binary' or obj.get('label') == 'normal':
+            predictions[key] = obj
+            continue
+
+        # SAM-2 localization
+        sam_adapter.set_image(query_img)
+        H, W = query_img.height, query_img.width
+
+        region_masks = []
+        region_paths = []
+        for r_idx, region in enumerate(obj.get('regions', [])):
+            pos = region.get('points_positive', [])[:max_points]
+            neg = region.get('points_negative', [])[:max_points]
+            pos_px = np.array([[float(p['x']) * W, float(p['y']) * H] for p in pos], dtype=np.float32)
+            neg_px = np.array([[float(p['x']) * W, float(p['y']) * H] for p in neg], dtype=np.float32) if neg else None
+
+            box_px = None
+            if 'bbox' in region:
+                x0, y0, x1, y1 = region['bbox']
+                box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
+
+            masks, scores, _ = sam_adapter.predict_region(
+                pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask
+            )
+            k = int(np.argmax(scores))
+            rmask = (masks[k].astype(np.uint8) * 255)
+            rpath = masks_root / f"{key}__r{r_idx}.png"
+            Sam2Adapter.save_mask(rmask, rpath)
+            region_masks.append(rmask)
+            region_paths.append(str(rpath))
+
+        final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
+        top1_path = masks_root / f"{key}.png"
+        Sam2Adapter.save_mask(final_mask, top1_path)
+        Sam2Adapter.save_overlay(query_img, final_mask, overlays_root / f"{key}.png")
+
+        obj['sam2'] = {"top1_path": str(top1_path), "all_paths": region_paths}
+        predictions[key] = obj
+    
     return predictions
 
 
@@ -526,14 +510,15 @@ def main():
         default=1,
         help='Number of reference images to use (only the first is used).'
     )
-    # Retain heatmap_mode for backwards compatibility but default to 'none'
-    parser.add_argument(
-        '--heatmap_mode',
-        type=str,
-        choices=['contour', 'none'],
-        default='none',
-        help='Heatmap mode (ignored in binary detection).'
-    )
+    parser.add_argument('--heatmap_mode', type=str, default='none')
+    # +++ new flags
+    parser.add_argument('--task', choices=['binary','localize'], default='localize')
+    parser.add_argument('--sam2_repo', type=str, default='facebook/sam2.1-hiera-large')
+    parser.add_argument('--masks_dir', type=str, default=None)
+    parser.add_argument('--overlays_dir', type=str, default=None)
+    parser.add_argument('--multimask', action='store_true')
+    parser.add_argument('--max_points', type=int, default=10)
+
     args = parser.parse_args()
     # Retrieve dataset directory and prompts file
     data_dir, json_file_path = get_dataset_config(args.dataset)
@@ -590,7 +575,7 @@ def main():
     else:
         raise ValueError(f"Unsupported model type: {args.model}")
     # Execute inference
-    run_llm(
+    preds = run_llm(
         model_type=args.model,
         prompts_dict=prompts_dict,
         data_dir=data_dir,
@@ -602,9 +587,24 @@ def main():
         model=model,
         processor=processor,
         gpt_model_name=args.gpt_model if args.model == 'gpt' else None,
+        task=args.task,
+        sam2_repo=args.sam2_repo,
+        masks_dir=args.masks_dir,
+        overlays_dir=args.overlays_dir,
+        multimask=args.multimask,
+        max_points=args.max_points,
     )
+    # persist predictions JSON using existing utils pathing
+    from utils import get_save_path, save_json
+    save_path = get_save_path(
+        args.heatmap_mode,
+        args.dataset,
+        args.model,
+        gpt_model_name=(args.gpt_model if args.model == 'gpt' else args.model),
+    )
+    save_json(preds, save_path)
+    print(f"[✓] Predictions saved to: {save_path}")
     print("Done")
-
 
 if __name__ == '__main__':
     main() 

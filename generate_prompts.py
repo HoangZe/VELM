@@ -1,24 +1,3 @@
-"""
-Generate prompts for binary anomaly detection.
-
-This module prepares simple prompts for a binary anomaly detection task.  For
-each test image in a supported dataset, it constructs a prompt instructing a
-multimodal language model (LMM) to compare a reference "good" image with the
-query image and decide whether the query contains any anomalies.  The prompts
-produced by this script do not rely on dataset-specific defect descriptions,
-contours or heatmaps.  Instead they use a generic instruction pattern that
-works across categories and datasets.
-
-Example prompt:
-
-    The first image shows a normal OBJECT.  The second image shows another
-    OBJECT.  Compare the two images and decide whether the second image
-    contains any anomaly or defect.  If it does, reply with "anomalous".
-    Otherwise reply with "normal".  Only reply with the single word answer.
-
-Replace `OBJECT` with the category name.
-"""
-
 import argparse
 import logging
 import os
@@ -33,28 +12,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def generate_binary_prompt(category: str) -> str:
-    """
-    Generate a binary detection prompt for a given category.
-
-    This helper takes a category name (e.g. "bottle" or "pipe_fryum") and
-    substitutes it into a generic template instructing the model to compare a
-    normal reference image with a query image.  The prompt tells the model to
-    respond with either "anomalous" or "normal" only.
-
-    Args:
-        category: The name of the object category.
-
-    Returns:
-        str: A completed prompt string suitable for inference.
-    """
-    base_text = (
-        "The first image shows a normal OBJECT. The second image shows another OBJECT. "
-        "Compare the two images and decide whether the second image contains any anomaly or defect. "
-        "If it does, reply with \"anomalous\". Otherwise reply with \"normal\". "
-        "Only reply with the single word answer."
+def make_localize_prompt(category: str) -> str:
+    return (
+        f"You are a visual anomaly inspector for {category}. "
+        "Image A is a normal reference; Image B is the query. "
+        "Compare A vs B and decide if B contains any anomaly.\n\n"
+        "You must and only return a JSON object:\n"
+        'If no anomaly: {"label":"normal"}\n'
+        "If anomaly: {\n"
+        '  "label":"anomalous",\n'
+        '  "regions":[{\n'
+        '    "points_positive":[{"x":0.62,"y":0.41}, ...],\n'
+        '    "points_negative":[{"x":0.58,"y":0.52}],\n'
+        '    "bbox":[x0,y0,x1,y1]\n'
+        "  }],\n"
+        '  "confidence": 0.0-1.0\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Coordinates are normalized to [0,1] on Image B.\n"
+        "- Provide 6–10 well-placed positive points outlining each anomalous region; include 1–3 negatives just outside.\n"
+        "- No text outside the JSON."
     )
-    return base_text.replace("OBJECT", category)
 
 
 def collect_prompts(
@@ -91,13 +69,13 @@ def collect_prompts(
         try:
             # Each defect class (including 'good') has its own subdirectory
             defect_classes = [d for d in os.listdir(test_dir) if os.path.isdir(test_dir / d)]
-            prompt_text = generate_binary_prompt(category)
+            prompt_text = make_localize_prompt(category)
             for defect_class in defect_classes:
                 defect_dir = test_dir / defect_class
                 if not defect_dir.exists():
                     logger.warning(f"Defect class directory not found: {defect_dir}")
                     continue
-                image_files = [f for f in os.listdir(defect_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg', '.png'))]
+                image_files = [f for f in os.listdir(defect_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
                 for image_file in image_files:
                     image_path = defect_dir / image_file
                     # Build a key that captures the category, defect class and image name without extension
