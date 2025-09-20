@@ -391,14 +391,14 @@ def run_llm(
             if not ref_files:
                 raise FileNotFoundError(f"No valid reference images found in {ref_dir}")
             ref_path = ref_dir / ref_files[0]
-            ref_img = Image.open(ref_path).convert('RGB').resize((image_size, image_size))
+            ref_img = Image.open(ref_path).convert('RGB')
             if model_type == 'gpt':
                 images.append(encode_image(ref_img))
             else:
                 images.append(ref_img)
         # Load query image from prompts_dict
         query_path = value['image']
-        query_img = Image.open(query_path).convert('RGB').resize((image_size, image_size))
+        query_img = Image.open(query_path).convert('RGB')
         if model_type == 'gpt':
             images.append(encode_image(query_img))
         else:
@@ -456,13 +456,13 @@ def run_llm(
             k = int(np.argmax(scores))
             rmask = (masks[k].astype(np.uint8) * 255)
             rpath = masks_root / f"{key}__r{r_idx}.png"
-            Sam2Adapter.save_mask(rmask, rpath)
+            Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
             region_masks.append(rmask)
             region_paths.append(str(rpath))
 
         final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
         top1_path = masks_root / f"{key}.png"
-        Sam2Adapter.save_mask(final_mask, top1_path)
+        Sam2Adapter.save_mask(final_mask, top1_path, hw_expected=(H, W))
         Sam2Adapter.save_overlay(query_img, final_mask, overlays_root / f"{key}.png")
 
         obj['sam2'] = {"top1_path": str(top1_path), "all_paths": region_paths}
@@ -594,8 +594,6 @@ def main():
         multimask=args.multimask,
         max_points=args.max_points,
     )
-    # persist predictions JSON using existing utils pathing
-    from utils import get_save_path, save_json
     save_path = get_save_path(
         args.heatmap_mode,
         args.dataset,

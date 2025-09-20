@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, Tuple
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 import torch
 from sam2.sam2_image_predictor import SAM2ImagePredictor
@@ -16,7 +16,8 @@ class Sam2Adapter:
 
     def set_image(self, img: Image.Image | np.ndarray) -> None:
         if isinstance(img, Image.Image):
-            img = np.array(img.convert("RGB"))
+            img = ImageOps.exif_transpose(img).convert("RGB")  # EXIF orientation fix
+            img = np.array(img)
         assert img.ndim == 3 and img.shape[2] == 3, "Expect HxWx3 image"
         self.image_hw = (img.shape[0], img.shape[1])
         with torch.inference_mode():
@@ -57,9 +58,12 @@ class Sam2Adapter:
         return (acc.astype(np.uint8) * 255)
 
     @staticmethod
-    def save_mask(mask: np.ndarray, path: Path) -> None:
+    def save_mask(mask: np.ndarray, path: Path, hw_expected: Optional[tuple[int,int]] = None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(mask).save(path)
+        m = mask
+        if hw_expected is not None and m.shape != hw_expected:
+            m = np.array(Image.fromarray(m).resize((hw_expected[1], hw_expected[0]), resample=Image.NEAREST))
+        Image.fromarray(m).save(path)
 
     @staticmethod
     def save_overlay(rgb: Image.Image | np.ndarray, mask_bin: np.ndarray, path: Path, alpha: float=0.45) -> None:

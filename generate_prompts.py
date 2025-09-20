@@ -22,18 +22,17 @@ def make_localize_prompt(category: str) -> str:
         "If anomaly: {\n"
         '  "label":"anomalous",\n'
         '  "regions":[{\n'
-        '    "points_positive":[{"x":0.62,"y":0.41}, ...],\n'
-        '    "points_negative":[{"x":0.58,"y":0.52}],\n'
-        '    "bbox":[x0,y0,x1,y1]\n'
+        '    "points_positive":[{"x":0.xx,"y":0.yy}, ...],\n'
+        '    "points_negative":[{"x":0.xx,"y":0.yy}],\n'
         "  }],\n"
         '  "confidence": 0.0-1.0\n'
         "}\n\n"
         "Rules:\n"
-        "- Coordinates are normalized to [0,1] on Image B.\n"
-        "- Provide 6–10 well-placed positive points outlining each anomalous region; include 1–3 negatives just outside.\n"
+        "- Coordinates are normalized to [0,1] on Image B **at its original resolution (W×H)**.\n"
+        "- Place **points_positive inside the anomalous region**; place **points_negative on nearby normal background**.\n"
+        "- Provide 6–10 well-placed positives and 1–3 negatives per region.\n"
         "- No text outside the JSON."
     )
-
 
 def collect_prompts(
     data_dir: Path,
