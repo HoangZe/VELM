@@ -125,7 +125,7 @@ def get_qwen_output(
     )
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
-    generated_ids = model.generate(**inputs, max_new_tokens=128)
+    generated_ids = model.generate(**inputs, max_new_tokens=1024)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -171,7 +171,7 @@ def get_llama_output(
     inputs = inputs.to(device)
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
     generated_ids = model.generate(
-        **inputs, max_new_tokens=128, pad_token_id=pad_id
+        **inputs, max_new_tokens=1024, pad_token_id=pad_id
     )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -219,7 +219,7 @@ def get_llava_output(
     inputs = inputs.to(device)
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
     generated_ids = model.generate(
-        **inputs, max_new_tokens=128, pad_token_id=pad_id
+        **inputs, max_new_tokens=1024, pad_token_id=pad_id
     )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -272,7 +272,7 @@ def get_gemma_output(
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
     generated_ids = model.generate(
         **inputs,
-        max_new_tokens=16,
+        max_new_tokens=1024,
         pad_token_id=pad_id,
         temperature=0.0,
         do_sample=False,
