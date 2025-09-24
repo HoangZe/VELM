@@ -15,23 +15,23 @@ logger = logging.getLogger(__name__)
 def make_localize_prompt(category: str) -> str:
     return (
         f"You are a visual anomaly inspector for {category}. "
-        "Image A is a normal reference; Image B is the query. "
+        "The first image (Image A) is a normal reference; the second image (Image B) is the query. "
         "Compare A vs B and decide if B contains any anomaly.\n\n"
-        "You must and only return a JSON object:\n"
-        'If no anomaly: {"label":"normal"}\n'
+        "Return exactly one JSON object as the entire message—no other characters.\n"
+        "If no anomaly: {\"label\":\"normal\"}\n"
         "If anomaly: {\n"
-        '  "label":"anomalous",\n'
-        '  "regions":[{\n'
-        '    "points_positive":[{"x":0.xx,"y":0.yy}, ...],\n'
-        '    "points_negative":[{"x":0.xx,"y":0.yy}],\n'
+        "  \"label\": \"anomalous\",\n"
+        "  \"regions\": [{\n"
+        "    \"points_positive\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],\n"
+        "    \"points_negative\": [{\"x\": 0.xx, \"y\": 0.yy}],\n"
+        "    \"bbox\": [x0, y0, x1, y1]\n"
         "  }],\n"
-        '  "confidence": 0.0-1.0\n'
+        "  \"confidence\": 0.0-1.0\n"
         "}\n\n"
         "Rules:\n"
-        "- Coordinates are normalized to [0,1] on Image B **at its original resolution (W×H)**.\n"
-        "- Place **points_positive inside the anomalous region**; place **points_negative on nearby normal background**.\n"
-        "- Provide 6–10 well-placed positives and 1–3 negatives per region.\n"
-        "- No text outside the JSON."
+        "- Coordinates are normalized to [0,1] on Image B at its original resolution (W×H).\n"
+        "- Put points_positive inside the anomalous region; points_negative on nearby normal background, which will help outline the anomalous region.\n"
+        "- Provide about 6 to 10 positives and 1 to 3 negatives per region."
     )
 
 def collect_prompts(
@@ -67,14 +67,14 @@ def collect_prompts(
 
         try:
             # Each defect class (including 'good') has its own subdirectory
-            defect_classes = [d for d in os.listdir(test_dir) if os.path.isdir(test_dir / d)]
+            defect_classes = sorted([d for d in os.listdir(test_dir) if os.path.isdir(test_dir / d)])
             prompt_text = make_localize_prompt(category)
             for defect_class in defect_classes:
                 defect_dir = test_dir / defect_class
                 if not defect_dir.exists():
                     logger.warning(f"Defect class directory not found: {defect_dir}")
                     continue
-                image_files = [f for f in os.listdir(defect_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                image_files = sorted([f for f in os.listdir(defect_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))])
                 for image_file in image_files:
                     image_path = defect_dir / image_file
                     # Build a key that captures the category, defect class and image name without extension

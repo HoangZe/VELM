@@ -36,7 +36,6 @@ def get_gpt_output(
     images: List[str],
     text: str,
     model_name: str,
-    heatmap_mode: str,
 ) -> Tuple[str, Dict[str, int]]:
     """
     Query an OpenAI GPT model with a pair of images and a text prompt.
@@ -54,7 +53,6 @@ def get_gpt_output(
         text: Prompt text instructing the model to respond ``anomalous``
             or ``normal``.
         model_name: Name of the GPT model variant to use.
-        heatmap_mode: Deprecated; retained to avoid breaking existing calls.
 
     Returns:
         Tuple[str, Dict[str, int]]: The model's text response and token usage
@@ -85,7 +83,6 @@ def get_qwen_output(
     processor: Any,
     input_imgs: List[Image.Image],
     input_txt: str,
-    heatmap_mode: str,
 ) -> List[str]:
     """
     Get output from a Qwen2.5‑VL model for binary anomaly detection.
@@ -100,7 +97,6 @@ def get_qwen_output(
         processor: Qwen processor used to prepare inputs.
         input_imgs: List of PIL images (reference followed by query).
         input_txt: Prompt text instructing the model.
-        heatmap_mode: Ignored parameter.
 
     Returns:
         List[str]: Decoded model outputs.
@@ -139,7 +135,6 @@ def get_llama_output(
     processor: Any,
     input_imgs: List[Image.Image],
     input_txt: str,
-    heatmap_mode: str,
 ) -> List[str]:
     imgs = input_imgs[:2]
     messages = [
@@ -148,7 +143,7 @@ def get_llama_output(
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                    "text": "You are a strict classifier. Follow the guidance of the user's message strictly."
                 }
             ],
         },
@@ -186,7 +181,6 @@ def get_llava_output(
     processor: Any,
     input_imgs: List[Image.Image],
     input_txt: str,
-    heatmap_mode: str,
 ) -> List[str]:
     imgs = input_imgs[:2]
     messages = [
@@ -195,7 +189,7 @@ def get_llava_output(
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                    "text": "You are a strict classifier. Follow the guidance of the user's message strictly."
                 }
             ],
         },
@@ -234,7 +228,6 @@ def get_gemma_output(
     processor: Any,
     input_imgs: List[Image.Image],
     input_txt: str,
-    heatmap_mode: str,
 ) -> List[str]:
     imgs = input_imgs[:2]
     messages = [
@@ -243,7 +236,7 @@ def get_gemma_output(
             "content": [
                 {
                     "type": "text",
-                    "text": "You are a strict classifier. Answer with EXACTLY ONE label from the options in the user message. Lowercase, no punctuation, no extra words."
+                    "text": "You are a strict classifier. Follow the guidance of the user's message strictly."
                 }
             ],
         },
@@ -265,7 +258,6 @@ def get_gemma_output(
         padding=True,
         return_tensors="pt",
         add_special_tokens=False,
-        do_pan_and_scan=True,
     )
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
@@ -317,9 +309,7 @@ def run_llm(
     model_type: str,
     prompts_dict: Dict[str, Dict[str, Any]],
     data_dir: Path,
-    image_size: int,
     num_ref: int,
-    heatmap_mode: str,
     dataset: str,
     client: Optional[OpenAI] = None,
     model: Optional[Any] = None,
@@ -342,8 +332,7 @@ def run_llm(
     image specified in the prompts dictionary.  It resizes both images to
     ``image_size`` and passes them to the selected model backend along with
     the prompt text.  The backend should return either ``anomalous`` or
-    ``normal``.  Heatmap functionality from the original VELM framework is
-    disabled; the ``heatmap_mode`` argument is ignored.
+    ``normal``.
 
     Args:
         model_type: One of 'gpt', 'qwen', 'llama', 'llava' or 'gemma'.
@@ -351,8 +340,7 @@ def run_llm(
             'image' (path to the query image) and 'text' (prompt text).
         data_dir: Root of the dataset (e.g. datasets/mvtec_ad).
         image_size: Side length to resize images to before inference.
-        num_ref: Number of reference images to use.  Only the first is used.
-        heatmap_mode: Ignored parameter, kept for backwards compatibility.
+        num_ref: Number of reference images to use.
         dataset: Dataset name ('mvtec_ad', 'mvtec_ac', 'visa_ac').
         client: OpenAI client instance when model_type=='gpt'.
         model: Model instance for HF backends.
@@ -407,20 +395,20 @@ def run_llm(
         text = value['text']
         # Invoke backend → get raw text (LLM must return strict JSON)
         if model_type == 'gpt':
-            response, usage = get_gpt_output(client, images, text, gpt_model_name, heatmap_mode)
+            response, usage = get_gpt_output(client, images, text, gpt_model_name)
             total_tokens += usage.total_tokens
             raw_text = response
         elif model_type == 'qwen':
-            out = get_qwen_output(model, processor, images, text, heatmap_mode)
+            out = get_qwen_output(model, processor, images, text)
             raw_text = out[0]
         elif model_type == 'llama':
-            out = get_llama_output(model, processor, images, text, heatmap_mode)
+            out = get_llama_output(model, processor, images, text)
             raw_text = out[0]
         elif model_type == 'llava':
-            out = get_llava_output(model, processor, images, text, heatmap_mode)
+            out = get_llava_output(model, processor, images, text)
             raw_text = out[0]
         elif model_type == 'gemma':
-            out = get_gemma_output(model, processor, images, text, heatmap_mode)
+            out = get_gemma_output(model, processor, images, text)
             raw_text = out[0]
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
@@ -446,15 +434,64 @@ def run_llm(
             neg_px = np.array([[float(p['x']) * W, float(p['y']) * H] for p in neg], dtype=np.float32) if neg else None
 
             box_px = None
+            def _coverage(mask_u8, pts):
+                if pts is None or len(pts) == 0: return 0.0
+                h, w = mask_u8.shape
+                ii = np.clip(np.round(pts[:, 1]).astype(int), 0, h-1)
+                jj = np.clip(np.round(pts[:, 0]).astype(int), 0, w-1)
+                return float(mask_u8[ii, jj].mean()) / 255.0
+
+            # try as-is (x,y)
+            masks, scores, _ = sam_adapter.predict_region(pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask)
+            k = int(np.argmax(scores))
+            mask_u8_xy = (masks[k].astype(np.uint8) * 255)
+
+            # try swapped (y,x) in case LLM returned row/col
+            pos_yx = pos_px[:, [1, 0]]
+            neg_yx = neg_px[:, [1, 0]] if neg_px is not None else None
+            masks2, scores2, _ = sam_adapter.predict_region(pos_pts_px=pos_yx, neg_pts_px=neg_yx, box_px=box_px, multimask_output=multimask)
+            k2 = int(np.argmax(scores2))
+            mask_u8_yx = (masks2[k2].astype(np.uint8) * 255)
+
+            # choose orientation by positive-vs-negative coverage
+            def _score(mask, p, n): 
+                return _coverage(mask, p) - 0.5*_coverage(mask, n)
+
+            score_xy = _score(mask_u8_xy, pos_px, neg_px)
+            score_yx = _score(mask_u8_yx, pos_yx, neg_yx)
+            use_yx = score_yx > score_xy
+            mask_u8 = mask_u8_yx if use_yx else mask_u8_xy
+            pos_best = pos_yx if use_yx else pos_px
+            neg_best = neg_yx if use_yx else neg_px
+
+            # one-time polarity flip if negatives are covered more than positives
+            if _coverage(mask_u8, pos_best) < _coverage(mask_u8, neg_best):
+                masks3, scores3, _ = sam_adapter.predict_region(
+                    pos_pts_px=neg_best if neg_best is not None else np.empty((0,2), np.float32),
+                    neg_pts_px=pos_best,
+                    box_px=box_px,
+                    multimask_output=multimask
+                )
+                mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
+
+            if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
+                x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
+                pad = 0.05 * max(W, H)
+                box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
+
             if 'bbox' in region:
                 x0, y0, x1, y1 = region['bbox']
                 box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
 
-            masks, scores, _ = sam_adapter.predict_region(
-                pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask
+            # Predict using the resolved polarity 
+            masks_final, scores_final, _ =  sam_adapter.predict_region(
+                pos_pts_px=pos_best if pos_best is not None else np.empty((0,2), np.float32),
+                neg_pts_px=neg_best,
+                box_px=box_px,
+                multimask_output=multimask,
             )
-            k = int(np.argmax(scores))
-            rmask = (masks[k].astype(np.uint8) * 255)
+            kf = int(np.argmax(scores_final))
+            rmask = (masks_final[kf].astype(np.uint8) * 255)
             rpath = masks_root / f"{key}__r{r_idx}.png"
             Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
             region_masks.append(rmask)
@@ -499,18 +536,11 @@ def main():
         help='Dataset to process.'
     )
     parser.add_argument(
-        '--image_size',
-        type=int,
-        default=448,
-        help='Resize images to this square dimension.'
-    )
-    parser.add_argument(
         '--num_ref',
         type=int,
         default=1,
         help='Number of reference images to use (only the first is used).'
     )
-    parser.add_argument('--heatmap_mode', type=str, default='none')
     # +++ new flags
     parser.add_argument('--task', choices=['binary','localize'], default='localize')
     parser.add_argument('--sam2_repo', type=str, default='facebook/sam2.1-hiera-large')
@@ -579,9 +609,7 @@ def main():
         model_type=args.model,
         prompts_dict=prompts_dict,
         data_dir=data_dir,
-        image_size=args.image_size,
         num_ref=args.num_ref,
-        heatmap_mode=args.heatmap_mode,
         dataset=args.dataset,
         client=client,
         model=model,
@@ -595,7 +623,7 @@ def main():
         max_points=args.max_points,
     )
     save_path = get_save_path(
-        args.heatmap_mode,
+        "binary",
         args.dataset,
         args.model,
         gpt_model_name=(args.gpt_model if args.model == 'gpt' else args.model),
