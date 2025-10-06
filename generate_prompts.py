@@ -3,7 +3,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple
-from utils import save_json
+from utils import save_json, load_json
 
 # Configure logging
 logging.basicConfig(
@@ -12,31 +12,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def make_localize_prompt(category: str) -> str:
+def make_localize_prompt(category: str, defect: str, guidance_text: str) -> str:
     return (
-        f"You are a visual anomaly inspector for {category}. "
-        "The first image (Image A) is a normal reference; the second image (Image B) is the query. "
-        "Compare A vs B and decide if B contains any anomaly.\n\n"
+        f"You are a visual anomaly inspector for '{category}'.\n"
+        "Image A is a normal reference; Image B is the query to analyze.\n\n"
+        "Domain guidance for this query (from dataset descriptions):\n"
+        f"{guidance_text}\n\n"
         "Return exactly one JSON object as the entire message—no other characters.\n"
         "If no anomaly: {\"label\":\"normal\"}\n"
         "If anomaly: {\n"
         "  \"label\": \"anomalous\",\n"
         "  \"regions\": [{\n"
         "    \"points_positive\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],\n"
-        "    \"points_negative\": [{\"x\": 0.xx, \"y\": 0.yy}],\n"
+        "    \"points_negative\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],\n"
         "    \"bbox\": [x0, y0, x1, y1]\n"
         "  }],\n"
         "  \"confidence\": 0.0-1.0\n"
         "}\n\n"
-        "Rules:\n"
+        "Rules (must follow):\n"
         "- Coordinates are normalized to [0,1] on Image B at its original resolution (W×H).\n"
-        "- Put points_positive inside the anomalous region; points_negative on nearby normal background, which will help outline the anomalous region.\n"
-        "- Provide about 6 to 10 positives and 1 to 3 negatives per region."
+        "- Provide 6–10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges).\n"
+        "- Provide 2–4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure.\n"
+        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02–0.03 of image size), NOT the entire object/opening.\n"
+        "- Do not add any prose—respond with the single JSON object only."
     )
 
 def collect_prompts(
     data_dir: Path,
     object_categories: List[str],
+    defects_data: Dict[str, Dict[str, List[str]]] | None = None,
 ) -> Dict[str, Dict[str, str]]:
     """
     Collect prompts for each test image across all categories.
@@ -68,7 +72,6 @@ def collect_prompts(
         try:
             # Each defect class (including 'good') has its own subdirectory
             defect_classes = sorted([d for d in os.listdir(test_dir) if os.path.isdir(test_dir / d)])
-            prompt_text = make_localize_prompt(category)
             for defect_class in defect_classes:
                 defect_dir = test_dir / defect_class
                 if not defect_dir.exists():
@@ -79,17 +82,27 @@ def collect_prompts(
                     image_path = defect_dir / image_file
                     # Build a key that captures the category, defect class and image name without extension
                     key = f"{category}_{defect_class}_{Path(image_file).stem}"
-                    images_dict[key] = {
-                        'image': str(image_path),
-                        'text': prompt_text
-                    }
+                    # --- build guidance text from descriptions (if provided) ---
+                    guidance_parts: List[str] = []
+                    if defects_data and category in defects_data:
+                        obj = defects_data[category]
+                        # object-level "normal" overview
+                        if isinstance(obj.get('normal'), list) and len(obj['normal']) >= 2:
+                            guidance_parts.append(obj['normal'][1])
+                        # defect-level description
+                        if defect_class in obj and isinstance(obj[defect_class], list) and len(obj[defect_class]) >= 2:
+                            guidance_parts.append(obj[defect_class][1])
+                    guidance_text = " ".join(guidance_parts).strip()
+
+                    prompt_text = make_localize_prompt(category, defect_class, guidance_text)
+                    images_dict[key] = {'image': str(image_path), 'text': prompt_text}
         except Exception as e:
             logger.error(f"Error processing category {category}: {e}")
             continue
     logger.info(f"Collected {len(images_dict)} prompts")
     return images_dict
 
-def get_dataset_config(dataset: str) -> Tuple[Path, List[str], str]:
+def get_dataset_config(dataset: str) -> Tuple[Path, Path, List[str], str]:
     """
     Get configuration for a specific dataset.
 
@@ -109,6 +122,7 @@ def get_dataset_config(dataset: str) -> Tuple[Path, List[str], str]:
     """
     if dataset == 'mvtec_ad':
         data_dir = Path.cwd() / 'datasets' / 'mvtec_ad'
+        json_path = Path.cwd() / 'configs' / 'mvtec_ad_des.json'
         filename = "mvtec_ad_prompts.json"
         object_categories = [
             'bottle', 'cable', 'capsule', 'carpet', 'grid', 'hazelnut',
@@ -117,6 +131,7 @@ def get_dataset_config(dataset: str) -> Tuple[Path, List[str], str]:
         ]
     elif dataset == 'mvtec_ac':
         data_dir = Path.cwd() / 'datasets' / 'mvtec_ac'
+        json_path = Path.cwd() / 'configs' / 'mvtec_ac_des.json'
         filename = "mvtec_ac_prompts.json"
         object_categories = [
             'bottle', 'cable', 'capsule', 'carpet', 'grid', 'hazelnut',
@@ -125,6 +140,7 @@ def get_dataset_config(dataset: str) -> Tuple[Path, List[str], str]:
         ]
     elif dataset == 'visa_ac':
         data_dir = Path.cwd() / 'datasets' / 'visa_ac'
+        json_path = Path.cwd() / 'configs' / 'visa_ac_des.json'
         filename = "visa_ac_prompts.json"
         object_categories = [
             'candle', 'capsules', 'cashew', 'chewinggum', 'fryum',
@@ -133,7 +149,7 @@ def get_dataset_config(dataset: str) -> Tuple[Path, List[str], str]:
         ]
     else:
         raise ValueError(f"Unsupported dataset: {dataset}")
-    return data_dir, object_categories, filename
+    return data_dir, json_path, object_categories, filename
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -153,6 +169,12 @@ def parse_arguments() -> argparse.Namespace:
         choices=['mvtec_ad', 'mvtec_ac', 'visa_ac'],
         help='Dataset to use.'
     )
+    parser.add_argument(
+        '--description_path',
+        type = str,
+        default=None,
+        help='To override the default description JSON path.'
+    )
     return parser.parse_args()
 
 
@@ -161,14 +183,24 @@ def main() -> None:
     args = parse_arguments()
     try:
         logger.info(f"Starting prompt generation for dataset: {args.dataset}")
-        # Get dataset configuration without defect descriptions
-        data_dir, object_categories, filename = get_dataset_config(args.dataset)
-        # Validate the dataset directory
+        # Get dataset configuration
+        data_dir, default_json_path, object_categories, filename = get_dataset_config(args.dataset)
+        # Validate dataset directory
         if not data_dir.exists():
             logger.error(f"Data directory not found: {data_dir}")
             raise FileNotFoundError(f"Data directory not found: {data_dir}")
-        # Collect prompts
-        prompts = collect_prompts(data_dir, object_categories)
+        # Resolve descriptions path (CLI override takes precedence)
+        json_path = Path(args.descriptions_path) if args.descriptions_path else default_json_path
+        defects_data = {}
+        if json_path.exists():
+            defects_data = load_json(json_path)
+            logger.info(f"Loaded descriptions from: {json_path}")
+        else:
+            logger.warning(f"Descriptions JSON not found, continuing without: {json_path}")
+
+        # Collect prompts with injected guidance
+        prompts = collect_prompts(data_dir, object_categories, defects_data=defects_data)
+        
         # Prepare output path
         save_dir = Path.cwd() / 'configs' / 'prompts'
         save_path = save_dir / filename
