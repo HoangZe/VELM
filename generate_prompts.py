@@ -14,26 +14,26 @@ logger = logging.getLogger(__name__)
 
 def make_localize_prompt(category: str, defect: str, guidance_text: str) -> str:
     return (
-        f"You are a visual anomaly inspector for '{category}'.\n"
-        "Image A is a normal reference; Image B is the query to analyze.\n\n"
-        "Domain guidance for this query (from dataset descriptions):\n"
-        f"{guidance_text}\n\n"
-        "Return exactly one JSON object as the entire message—no other characters.\n"
-        "If no anomaly: {\"label\":\"normal\"}\n"
-        "If anomaly: {\n"
-        "  \"label\": \"anomalous\",\n"
-        "  \"regions\": [{\n"
-        "    \"points_positive\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],\n"
-        "    \"points_negative\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],\n"
-        "    \"bbox\": [x0, y0, x1, y1]\n"
-        "  }],\n"
-        "  \"confidence\": 0.0-1.0\n"
-        "}\n\n"
-        "Rules (must follow):\n"
-        "- Coordinates are normalized to [0,1] on Image B at its original resolution (W×H).\n"
-        "- Provide 6–10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges).\n"
-        "- Provide 2–4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure.\n"
-        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02–0.03 of image size), NOT the entire object/opening.\n"
+        f"You are a visual anomaly inspector for '{category}'"
+        "Image A is a normal reference; Image B is the query to analyze."
+        "Domain guidance for this query (from dataset descriptions):"
+        f"{guidance_text}"
+        "Return exactly one JSON object as the entire message—no other characters."
+        "If no anomaly: {\"label\":\"normal\"}"
+        "If anomaly: {"
+        "  \"label\": \"anomalous\","
+        "  \"regions\": [{"
+        "    \"points_positive\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],"
+        "    \"points_negative\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],"
+        "    \"bbox\": [x0, y0, x1, y1]"
+        "  }],"
+        "  \"confidence\": 0.0-1.0"
+        "}"
+        "Rules (must follow):"
+        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH)."
+        "- Provide 6-10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges)."
+        "- Provide 2-4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure."
+        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02-0.03 of image size), NOT the entire object/opening."
         "- Do not add any prose—respond with the single JSON object only."
     )
 
@@ -170,7 +170,7 @@ def parse_arguments() -> argparse.Namespace:
         help='Dataset to use.'
     )
     parser.add_argument(
-        '--description_path',
+        '--descriptions_path',
         type = str,
         default=None,
         help='To override the default description JSON path.'

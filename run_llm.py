@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 import torch
 import numpy as np
 from openai import OpenAI
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor, Gemma3ForConditionalGeneration
+from transformers import Qwen3VLMoeForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor, Gemma3ForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path, parse_llm_json
 from sam_adapter import Sam2Adapter
@@ -85,7 +85,7 @@ def get_qwen_output(
     input_txt: str,
 ) -> List[str]:
     """
-    Get output from a Qwen2.5‑VL model for binary anomaly detection.
+    Get output from a Qwen3‑VL model for binary anomaly detection.
 
     Only the first two images in ``input_imgs`` (reference and query) are
     utilised.  The ``heatmap_mode`` argument is retained for API
@@ -93,7 +93,7 @@ def get_qwen_output(
     accordingly and invokes the model.
 
     Args:
-        model: Loaded Qwen2.5‑VL model.
+        model: Loaded Qwen3‑VL model.
         processor: Qwen processor used to prepare inputs.
         input_imgs: List of PIL images (reference followed by query).
         input_txt: Prompt text instructing the model.
@@ -561,10 +561,10 @@ def main():
         model = None
         processor = None
     elif args.model == 'qwen':
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen2.5-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
+        model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
+            "Qwen/Qwen3-VL-30B-A3B-Instruct", torch_dtype="auto", device_map="auto"
         )
-        processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+        processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-30B-A3B-Instruct")
         client = None
     elif args.model == 'llama':
         hf_token = os.getenv("llama_access")
