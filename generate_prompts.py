@@ -14,12 +14,12 @@ logger = logging.getLogger(__name__)
 
 def make_localize_prompt(category: str, defect: str, guidance_text: str) -> str:
     return (
-        f"You are a visual anomaly inspector for '{category}'"
-        "Image A is a normal reference; Image B is the query to analyze."
-        "Domain guidance for this query (from dataset descriptions):"
-        f"{guidance_text}"
-        "Return exactly one JSON object as the entire message—no other characters."
-        "If no anomaly: {\"label\":\"normal\"}"
+        f"You are a visual anomaly inspector for '{category}'. "
+        "The first image - Image A - is a normal reference; the second image - Image B - is the query to analyze. "
+        "Domain guidance for this query: "
+        f"{guidance_text}. "
+        "Return exactly one JSON object as the entire message — no other characters. For cases that there were no anomalies seen in Image B, return just an image-level label; For cases that anomalies were found on the query image B, return an image-level label, and sets of coordinates that represent positive points (which lie within and indicate the anomalous region) and negative points (which lie around the anomalous region to outline the anomaly for localization), and a bounding box which covers the entire region of points. The format for these 2 cases of responses are defined as follows: "
+        "If no anomaly: {\"label\":\"normal\"}. "
         "If anomaly: {"
         "  \"label\": \"anomalous\","
         "  \"regions\": [{"
@@ -28,12 +28,12 @@ def make_localize_prompt(category: str, defect: str, guidance_text: str) -> str:
         "    \"bbox\": [x0, y0, x1, y1]"
         "  }],"
         "  \"confidence\": 0.0-1.0"
-        "}"
-        "Rules (must follow):"
-        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH)."
-        "- Provide 6-10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges)."
-        "- Provide 2-4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure."
-        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02-0.03 of image size), NOT the entire object/opening."
+        "} "
+        "Rules (must follow): "
+        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH). "
+        "- Provide 6-10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges). "
+        "- Provide 2-4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure. "
+        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02-0.03 of image size), NOT the entire object/opening. "
         "- Do not add any prose—respond with the single JSON object only."
     )
 
