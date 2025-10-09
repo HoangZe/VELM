@@ -10,19 +10,39 @@ import re, json
 # module logger used by helpers (e.g., load_config)
 logger = logging.getLogger(__name__)
 
-def parse_llm_json(raw: str) -> Dict:
+def parse_llm_json(raw_text: str):
     """
-    Strip code fences and parse the LLM's JSON; minimal schema checks.
+    Parse a single JSON object from an LLM response.
+    Tolerates common formatting artifacts (``` fences, trailing commas)
+    and repairs the frequent bbox ']'→'}' typo before loading.
     """
-    cleaned = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-    obj = json.loads(cleaned)
-    # normalize minimal schema
+    s = raw_text.strip()
+
+    # strip code fences if present
+    s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s)
+
+    # keep the first {...} block (drop progress bars or trailing logs)
+    m = re.search(r"\{.*\}", s, flags=re.S)
+    if m:
+        s = m.group(0)
+
+    # remove trailing commas before } or ]
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+
+    # repair frequent bbox bracket typo: ... "bbox": [ ... }  ->  ... "bbox": [ ... ] }
+    s = re.sub(r'("bbox"\s*:\s*\[[^\]]*?)(\})', r'\1]\2', s)
+
+    obj = json.loads(s)
+
+    # lightweight schema sanity checks (raise early for reprompt)
     if "label" not in obj:
-        raise ValueError("Missing 'label' in LLM output.")
-    if obj["label"] not in ("normal","anomalous"):
-        raise ValueError("Label must be 'normal' or 'anomalous'.")
-    if obj["label"] == "anomalous":
-        obj.setdefault("regions", [])
+        raise ValueError("missing 'label'")
+    if obj.get("label") == "anomalous":
+        if "regions" not in obj or not isinstance(obj["regions"], list) or not obj["regions"]:
+            raise ValueError("missing/empty 'regions'")
+        r0 = obj["regions"][0]
+        if "bbox" not in r0 or not isinstance(r0["bbox"], list) or len(r0["bbox"]) != 4:
+            raise ValueError("invalid 'bbox'")
     return obj
 
 def scale_points_norm_to_px(points: List[Dict], W: int, H: int, cap: int=10, allow_empty: bool=False) -> np.ndarray:
