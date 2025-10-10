@@ -546,7 +546,7 @@ def main():
     parser.add_argument('--sam2_repo', type=str, default='facebook/sam2.1-hiera-large')
     parser.add_argument('--masks_dir', type=str, default=None)
     parser.add_argument('--overlays_dir', type=str, default=None)
-    parser.add_argument('--multimask', action='store_true')
+    parser.add_argument('--multimask', action='store_true', default=False)
     parser.add_argument('--max_points', type=int, default=10)
 
     args = parser.parse_args()
