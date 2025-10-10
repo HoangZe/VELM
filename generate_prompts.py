@@ -12,14 +12,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def make_localize_prompt(category: str, defect: str, guidance_text: str) -> str:
+def make_localize_prompt(category: str, guidance_text: str) -> str:
     return (
-        f"You are a visual anomaly inspector for '{category}'. "
-        "The first image - Image A - is a normal reference; the second image - Image B - is the query to analyze. "
-        "Domain guidance for this query: "
-        f"{guidance_text}.\n\n"
-        "For cases that there were no anomalies seen in Image B, return just an image-level label; For cases that anomalies were found on the query image B, return an image-level label, and sets of coordinates that represent positive points (which lie within and indicate the anomalous region) and negative points (which lie around the anomalous region to outline the anomaly for localization), and a bounding box which covers the entire region of points. Return exactly one JSON object as the entire message — no other characters\n"
-        "If no anomaly: {\"label\":\"normal\"}.\n"
+        f"You are a visual anomaly inspector for '{category}'.\n"
+        "The first image (Image A) is a normal reference; the second image (Image B) is the query to analyze.\n\n"
+        "Domain guidance for this OBJECT:\n"
+        f"{guidance_text}\n\n"
+        "Return exactly one JSON object as the entire message—no other characters.\n"
+        "If no anomaly: {\"label\":\"normal\"}\n"
         "If anomaly: {\n"
         "  \"label\": \"anomalous\",\n"
         "  \"regions\": [{\n"
@@ -29,13 +29,55 @@ def make_localize_prompt(category: str, defect: str, guidance_text: str) -> str:
         "  }],\n"
         "  \"confidence\": 0.0-1.0\n"
         "}\n\n"
-        "Rules (must follow): "
-        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH). "
-        "- Provide 6-10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges). "
-        "- Provide 2-4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure. "
-        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02-0.03 of image size), NOT the entire object/opening. "
-        "- Do not add any prose—respond with the single JSON object only."
+        "Rules (must follow):\n"
+        "- For cases that there were no anomalies seen in Image B, return just an image-level label; For cases that anomalies were found on the query image B, return an image-level label, and sets of coordinates that represent positive points (which lie within and indicate the anomalous region) and negative points (which lie around the anomalous region to outline the anomaly for localization), and a bounding box which covers the entire region of points.\n"
+        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH).\n"
+        "- Provide 6 to 10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges).\n"
+        "- Provide 2 to 4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure.\n"
+        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02 to 0.03 of image size), NOT the entire object/opening.\n"
     )
+
+# generate_prompts.py
+
+def _extract_text(v) -> str:
+    """Descriptions may be str or [title, text]; normalize to plain text."""
+    if isinstance(v, list):
+        if len(v) >= 2 and isinstance(v[1], str):
+            return v[1].strip()
+        elif len(v) == 1 and isinstance(v[0], str):
+            return v[0].strip()
+        return ""
+    if isinstance(v, str):
+        return v.strip()
+    return ""
+
+def combine_guidance_for_category(descriptions: Dict, category: str) -> str:
+    """
+    Combine 'normal' + all defect-class descriptions for a category
+    into one guidance string. Order: normal first, then each defect.
+    """
+    if not descriptions or category not in descriptions:
+        return ""
+    obj = descriptions[category]
+    parts = []
+
+    # normal first (if present)
+    if "normal" in obj:
+        txt = _extract_text(obj["normal"])
+        if txt:
+            parts.append(f"- Normal: {txt}")
+
+    # all other classes
+    for k, v in obj.items():
+        if k == "normal":
+            continue
+        txt = _extract_text(v)
+        if txt:
+            parts.append(f"- {k.replace('_',' ').title()}: {txt}")
+
+    return "Guidance per defect type:\n" + "\n".join(parts) if parts else ""
+
+# generate_prompts.py
 
 def collect_prompts(
     data_dir: Path,
@@ -45,23 +87,13 @@ def collect_prompts(
     """
     Collect prompts for each test image across all categories.
 
-    For each object category this function traverses the ``test`` subfolders
-    (broken down by defect class) and records the path to every image file.
-    A binary detection prompt is generated for the category and attached to each
-    entry.  Keys in the resulting dictionary follow the pattern
-    ``<category>_<defect_class>_<image_id>`` where ``image_id`` is derived from
-    the filename stem.
-
-    Args:
-        data_dir: Root directory of the dataset (containing per-category
-            subdirectories).
-        object_categories: List of category names to process.
-
-    Returns:
-        Dict[str, Dict[str, str]]: A mapping from unique keys to dictionaries
-            containing the image path and the binary prompt.
+    For each object category, traverse its `test/<defect_class>` folders and
+    record every image path. The SAME object-level prompt (containing guidance
+    for ALL defect classes, including 'normal') is attached to every image
+    from that category.
     """
     images_dict: Dict[str, Dict[str, str]] = {}
+
     for category in object_categories:
         logger.info(f"Processing category: {category}")
         test_dir = data_dir / category / 'test'
@@ -69,38 +101,41 @@ def collect_prompts(
             logger.warning(f"Test directory not found for category {category}: {test_dir}")
             continue
 
+        # Build one combined guidance string for the entire category
+        guidance_text = combine_guidance_for_category(defects_data or {}, category)
+
         try:
-            # Each defect class (including 'good') has its own subdirectory
             defect_classes = sorted([d for d in os.listdir(test_dir) if os.path.isdir(test_dir / d)])
             for defect_class in defect_classes:
                 defect_dir = test_dir / defect_class
                 if not defect_dir.exists():
                     logger.warning(f"Defect class directory not found: {defect_dir}")
                     continue
-                image_files = sorted([f for f in os.listdir(defect_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))])
+
+                image_files = sorted([
+                    f for f in os.listdir(defect_dir)
+                    if f.lower().endswith(('.jpg', '.png', '.jpeg'))
+                ])
+
+                # Build the object-level prompt once
+                prompt_text = make_localize_prompt(category, guidance_text)
+
                 for image_file in image_files:
                     image_path = defect_dir / image_file
-                    # Build a key that captures the category, defect class and image name without extension
                     key = f"{category}_{defect_class}_{Path(image_file).stem}"
-                    # --- build guidance text from descriptions (if provided) ---
-                    guidance_parts: List[str] = []
-                    if defects_data and category in defects_data:
-                        obj = defects_data[category]
-                        # object-level "normal" overview
-                        if isinstance(obj.get('normal'), list) and len(obj['normal']) >= 2:
-                            guidance_parts.append(obj['normal'][1])
-                        # defect-level description
-                        if defect_class in obj and isinstance(obj[defect_class], list) and len(obj[defect_class]) >= 2:
-                            guidance_parts.append(obj[defect_class][1])
-                    guidance_text = " ".join(guidance_parts).strip()
 
-                    prompt_text = make_localize_prompt(category, defect_class, guidance_text)
-                    images_dict[key] = {'image': str(image_path), 'text': prompt_text}
+                    images_dict[key] = {
+                        'image': str(image_path),
+                        'text': prompt_text
+                    }
+
         except Exception as e:
             logger.error(f"Error processing category {category}: {e}")
             continue
+
     logger.info(f"Collected {len(images_dict)} prompts")
     return images_dict
+
 
 def get_dataset_config(dataset: str) -> Tuple[Path, Path, List[str], str]:
     """

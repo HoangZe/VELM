@@ -416,11 +416,15 @@ def run_llm(
         print(f"{key}: {raw_text}")
 
         # Parse JSON; in binary mode or 'normal' label, store as-is
-        obj = parse_llm_json(raw_text)
+        try:
+            obj = parse_llm_json(raw_text)
+        except Exception as e:
+            print(f"[warn] {key}: JSON parse failed; marking as normal and continuing: {e}")
+            predictions[key] = {"label": "normal", "_parse_error": str(e)}
+            continue
         if task == 'binary' or obj.get('label') == 'normal':
             predictions[key] = obj
             continue
-
         # SAM-2 localization
         sam_adapter.set_image(query_img)
         H, W = query_img.height, query_img.width
