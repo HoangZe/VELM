@@ -13,18 +13,43 @@ logger = logging.getLogger(__name__)
 def parse_llm_json(raw_text: str):
     """
     Parse a single JSON object from an LLM response.
-    Tolerates common formatting artifacts (``` fences, trailing commas)
-    and repairs the frequent bbox ']'→'}' typo before loading.
+    Tolerates common formatting artifacts (fences, trailing commas),
+    repairs frequent bbox ']'→'}' typos, and handles:
+      - orphan numerics inside point objects ({"x": 644, 528, "y": 498})
+      - regions that leaked outside the "regions" array
+      - premature top-level close before "confidence"
+    Falls back to parsing the first balanced top-level JSON object if needed.
     """
     s = raw_text.strip()
 
     # strip code fences if present
     s = re.sub(r"^```(?:json)?\s*|\s*```$", "", s)
 
-    # keep the first {...} block (drop progress bars or trailing logs)
+    # strip any non-JSON prefix (e.g., 'name: {...}')
+    first = s.find("{")
+    if first != -1:
+        s = s[first:]
+
+    # keep the widest {...} block (pre-repair)
     m = re.search(r"\{.*\}", s, flags=re.S)
     if m:
         s = m.group(0)
+
+    # ---- repairs (order matters) ----
+
+    # (A) orphan numeric in point objects:
+    # {"x": A, B, "y": C}  -> {"x": A, "y": C}
+    s = re.sub(
+        r'("x"\s*:\s*-?\d+(?:\.\d+)?),\s*-?\d+(?:\.\d+)?\s*,\s*("y"\s*:)',
+        r'\1, \2',
+        s
+    )
+    # {"y": A, B, "x": C}  -> {"y": A, "x": C}
+    s = re.sub(
+        r'("y"\s*:\s*-?\d+(?:\.\d+)?),\s*-?\d+(?:\.\d+)?\s*,\s*("x"\s*:)',
+        r'\1, \2',
+        s
+    )
 
     # remove trailing commas before } or ]
     s = re.sub(r",\s*([}\]])", r"\1", s)
@@ -32,9 +57,65 @@ def parse_llm_json(raw_text: str):
     # repair frequent bbox bracket typo: ... "bbox": [ ... }  ->  ... "bbox": [ ... ] }
     s = re.sub(r'("bbox"\s*:\s*\[[^\]]*?)(\})', r'\1]\2', s)
 
-    obj = json.loads(s)
+    # (B) regions leaked outside the "regions" array (premature close, then another region object)
+    #   ... "regions": [ {...} ] } , { "points_positive": ... }  -->  ... "regions": [ {...}, { "points_positive": ... } ]
+    s = re.sub(
+        r'\]\s*}\s*,\s*{\s*"points_(positive|negative)"',
+        r'], {"points_\1"',
+        s
+    )
+    # If a region started with bbox (rare), handle that too
+    s = re.sub(
+        r'\]\s*}\s*,\s*{\s*"bbox"',
+        r'], {"bbox"',
+        s
+    )
 
-    # lightweight schema sanity checks (raise early for reprompt)
+    # (C) premature top-level close before "confidence":  ] } , "confidence": ... }
+    # turn into:  ], "confidence": ... }
+    s = re.sub(
+        r'}\s*,\s*("confidence"\s*:)',
+        r', \1',
+        s
+    )
+
+    # ---- try strict load; on failure, fall back to first balanced object ----
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError:
+        # cut the first balanced top-level object
+        depth = 0
+        in_str = False
+        esc = False
+        start = s.find("{")
+        if start == -1:
+            raise
+        end = None
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == '\\':
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+        if end is None:
+            raise
+        s_balanced = s[start:end]
+        obj = json.loads(s_balanced)
+
+    # ---- lightweight schema checks ----
     if "label" not in obj:
         raise ValueError("missing 'label'")
     if obj.get("label") == "anomalous":
@@ -43,6 +124,7 @@ def parse_llm_json(raw_text: str):
         r0 = obj["regions"][0]
         if "bbox" not in r0 or not isinstance(r0["bbox"], list) or len(r0["bbox"]) != 4:
             raise ValueError("invalid 'bbox'")
+
     return obj
 
 def scale_points_norm_to_px(points: List[Dict], W: int, H: int, cap: int=10, allow_empty: bool=False) -> np.ndarray:

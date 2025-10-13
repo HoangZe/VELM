@@ -13,7 +13,72 @@ from transformers import Qwen3VLMoeForConditionalGeneration, AutoProcessor, Mlla
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path, parse_llm_json
 from sam_adapter import Sam2Adapter
+import re, json
+from typing import Callable
+from transformers import StoppingCriteria, StoppingCriteriaList
 
+try:
+    from lmformatenforcer import JsonSchemaParser
+    from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+except Exception:
+    JsonSchemaParser = None
+    build_transformers_prefix_allowed_tokens_fn = None
+
+# --- add: a single JSON schema your models must emit ---
+def build_anomaly_json_schema() -> dict:
+    # normalized in [0,1]
+    coord = {"type": "number", "minimum": 0.0, "maximum": 1.0}
+    point = {
+        "type": "object",
+        "properties": {"x": coord, "y": coord},
+        "required": ["x", "y"],
+        "additionalProperties": False
+    }
+    bbox = {
+        "type": "array",
+        "items": coord,
+        "minItems": 4, "maxItems": 4
+    }
+    region = {
+        "type": "object",
+        "properties": {
+            "points_positive": {"type": "array", "items": point, "minItems": 1},
+            "points_negative": {"type": "array", "items": point},
+            "bbox": bbox
+        },
+        "required": ["points_positive", "bbox"],
+        "additionalProperties": False
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string", "enum": ["normal", "anomalous"]},
+            "regions": {"type": "array", "items": region},
+            "confidence": {"type": "number"}
+        },
+        "required": ["label"],
+        "additionalProperties": False
+    }
+
+# --- add: build a single, universal message list for all backends ---
+def build_messages_for_images(imgs, instruction_text: str, system_text: str | None = None):
+    """
+    Universal multimodal messages for HF chat templates.
+    - Qwen & LLaVA happily accept images in the user message.
+    - Llama/Gemma also work (they may have a system msg too).
+    """
+    messages = []
+    if system_text:
+        messages.append({"role": "system", "content": [{"type": "text", "text": system_text}]})
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "image", "image": imgs[0]},
+            {"type": "image", "image": imgs[1]},
+            {"type": "text",  "text": instruction_text},
+        ],
+    })
+    return messages
 
 def encode_image(image: Image.Image) -> str:
     """
@@ -77,7 +142,6 @@ def get_gpt_output(
     )
     return response.choices[0].message.content, response.usage
 
-
 def get_qwen_output(
     model: Any,
     processor: Any,
@@ -121,7 +185,7 @@ def get_qwen_output(
     )
     device = "cuda" if torch.cuda.is_available() else "cpu"
     inputs = inputs.to(device)
-    generated_ids = model.generate(**inputs, max_new_tokens=1024)
+    generated_ids = model.generate(**inputs, max_new_tokens=500)
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
     ]
@@ -166,7 +230,7 @@ def get_llama_output(
     inputs = inputs.to(device)
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
     generated_ids = model.generate(
-        **inputs, max_new_tokens=1024, pad_token_id=pad_id
+        **inputs, max_new_tokens=500, pad_token_id=pad_id
     )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -213,7 +277,7 @@ def get_llava_output(
     inputs = inputs.to(device)
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
     generated_ids = model.generate(
-        **inputs, max_new_tokens=1024, pad_token_id=pad_id
+        **inputs, max_new_tokens=500, pad_token_id=pad_id
     )
     generated_ids_trimmed = [
         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -264,7 +328,7 @@ def get_gemma_output(
     pad_id = getattr(getattr(processor, "tokenizer", None), "eos_token_id", None)
     generated_ids = model.generate(
         **inputs,
-        max_new_tokens=1024,
+        max_new_tokens=500,
         pad_token_id=pad_id,
         temperature=0.0,
         do_sample=False,
@@ -304,6 +368,102 @@ def get_dataset_config(dataset: str) -> Tuple[Path, Path]:
 
     return data_dir, json_file_path
 
+def generate_json_with_tools(
+    model, processor, imgs, instruction_text: str, *,
+    max_new_tokens: int = 400, temperature: float = 0.0
+) -> tuple[dict, str]:
+    """
+    Enforce JSON by asking the model to call a tool whose parameters are the schema.
+    Works on models whose chat template supports `tools`.
+    Returns (parsed_json, raw_text).
+    """
+    schema = build_anomaly_json_schema()
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "report_anomaly",
+            "description": (
+                "Return the anomaly decision and localization strictly as JSON. "
+                "Do not write narrative text."
+            ),
+            "parameters": schema,
+        },
+    }]
+
+    # Strong system hint: always call the tool
+    system_text = ("You must call the tool `report_anomaly` and return only valid arguments. "
+                   "Do not output any text besides the tool call.")
+
+    messages = build_messages_for_images(imgs, instruction_text, system_text=system_text)
+
+    # Ask HF to use tool-use template if available
+    chat = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True, tools=tools
+    )
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(text=[chat], images=image_inputs, videos=video_inputs,
+                       padding=True, return_tensors="pt")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs = inputs.to(device)
+
+    gen_ids = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        temperature=temperature,
+        no_repeat_ngram_size=6,
+        repetition_penalty=1.15,
+    )
+    out_ids = gen_ids[:, inputs.input_ids.shape[1]:]
+    raw = processor.batch_decode(out_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+
+    # Extract the tool arguments JSON. Pattern works across common templates.
+    m = re.search(r'"arguments"\s*:\s*(\{.*?\})', raw, flags=re.S)
+    json_str = m.group(1) if m else re.search(r'\{.*\}', raw, flags=re.S).group(0)
+    return json.loads(json_str), raw
+
+def generate_json_with_guidance(
+    model, processor, imgs, instruction_text: str, *,
+    max_new_tokens: int = 400
+) -> tuple[dict, str]:
+    """
+    Enforce JSON with token-level constraints using LM-Format-Enforcer.
+    Model-agnostic; works even when tool calling isn't available.
+    Returns (parsed_json, raw_text).
+    """
+    if JsonSchemaParser is None or build_transformers_prefix_allowed_tokens_fn is None:
+        raise RuntimeError("lm-format-enforcer is not installed. `pip install lm-format-enforcer`")
+
+    schema = build_anomaly_json_schema()
+    parser = JsonSchemaParser(schema)
+    messages = build_messages_for_images(imgs, instruction_text)
+
+    chat = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(text=[chat], images=image_inputs, videos=video_inputs,
+                       padding=True, return_tensors="pt")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs = inputs.to(device)
+
+    # Build the constrained decoding hook
+    prefix_allowed_tokens_fn = build_transformers_prefix_allowed_tokens_fn(
+        processor.tokenizer, parser
+    )
+
+    gen_ids = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        do_sample=False,
+        temperature=0.0,
+        prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
+    )
+    out_ids = gen_ids[:, inputs.input_ids.shape[1]:]
+    raw = processor.batch_decode(out_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+
+    # The output should already be valid JSON; still guard with a simple first-object extract
+    m = re.search(r'\{.*\}', raw, flags=re.S)
+    return json.loads(m.group(0)), raw
 
 def run_llm(
     model_type: str,
@@ -322,6 +482,7 @@ def run_llm(
     overlays_dir: Optional[str] = None,
     multimask: bool = False,
     max_points: int = 10,
+    json_enforce: str = "guided"
 ) -> Dict[str, str]:
 
     """
@@ -393,38 +554,50 @@ def run_llm(
             images.append(query_img)
         # Retrieve prompt text
         text = value['text']
-        # Invoke backend → get raw text (LLM must return strict JSON)
+        # --- Enforce-JSON strategy selection (works for all HF backends) ---
+        obj = None
+        raw_text = None
         if model_type == 'gpt':
-            response, usage = get_gpt_output(client, images, text, gpt_model_name)
+            # If you still use GPT, you can also force JSON with OpenAI JSON mode.
+            response, usage = get_gpt_output(client, images if isinstance(images[0], str) else [encode_image(images[0]), encode_image(images[1])], text, gpt_model_name)
             total_tokens += usage.total_tokens
             raw_text = response
-        elif model_type == 'qwen':
-            out = get_qwen_output(model, processor, images, text)
-            raw_text = out[0]
-        elif model_type == 'llama':
-            out = get_llama_output(model, processor, images, text)
-            raw_text = out[0]
-        elif model_type == 'llava':
-            out = get_llava_output(model, processor, images, text)
-            raw_text = out[0]
-        elif model_type == 'gemma':
-            out = get_gemma_output(model, processor, images, text)
-            raw_text = out[0]
+            obj = json.loads(re.search(r'\{.*\}', raw_text, flags=re.S).group(0))
         else:
-            raise ValueError(f"Unsupported model type: {model_type}")
+            try:
+                if json_enforce == 'tools':
+                    obj, raw_text = generate_json_with_tools(model, processor, images[:2], text)
+                elif json_enforce == 'guided':
+                    obj, raw_text = generate_json_with_guidance(model, processor, images[:2], text)
+                else:
+                    # fall back to legacy free-form + repair
+                    out = (
+                        get_qwen_output if model_type=='qwen' else
+                        get_llama_output if model_type=='llama' else
+                        get_llava_output if model_type=='llava' else
+                        get_gemma_output
+                    )(model, processor, images, text)
+                    raw_text = out[0]
+                    obj = parse_llm_json(raw_text)
+            except Exception as e:
+                print(f"[warn] {key}: structured decode failed ({e}); trying legacy parse.")
+                if raw_text is None:
+                    out = (
+                        get_qwen_output if model_type=='qwen' else
+                        get_llama_output if model_type=='llama' else
+                        get_llava_output if model_type=='llava' else
+                        get_gemma_output
+                    )(model, processor, images, text)
+                    raw_text = out[0]
+                try:
+                    obj = parse_llm_json(raw_text)
+                except Exception as e2:
+                    print(f"[warn] {key}: JSON parse failed; marking as normal and continuing: {e2}")
+                    predictions[key] = {"label": "normal", "_parse_error": str(e2)}
+                    continue
 
         print(f"{key}: {raw_text}")
 
-        # Parse JSON; in binary mode or 'normal' label, store as-is
-        try:
-            obj = parse_llm_json(raw_text)
-        except Exception as e:
-            print(f"[warn] {key}: JSON parse failed; marking as normal and continuing: {e}")
-            predictions[key] = {"label": "normal", "_parse_error": str(e)}
-            continue
-        if task == 'binary' or obj.get('label') == 'normal':
-            predictions[key] = obj
-            continue
         # SAM-2 localization
         sam_adapter.set_image(query_img)
         H, W = query_img.height, query_img.width
@@ -434,8 +607,8 @@ def run_llm(
         for r_idx, region in enumerate(obj.get('regions', [])):
             pos = region.get('points_positive', [])[:max_points]
             neg = region.get('points_negative', [])[:max_points]
-            pos_px = np.array([[float(p['x']) * W, float(p['y']) * H] for p in pos], dtype=np.float32)
-            neg_px = np.array([[float(p['x']) * W, float(p['y']) * H] for p in neg], dtype=np.float32) if neg else None
+            pos_px = np.array([[p['x']*W, p['y']*H] for p in pos], dtype=np.float32)
+            neg_px = np.array([[p['x']*W, p['y']*H] for p in neg], dtype=np.float32) if neg else None
 
             box_px = None
             def _coverage(mask_u8, pts):
@@ -552,6 +725,12 @@ def main():
     parser.add_argument('--overlays_dir', type=str, default=None)
     parser.add_argument('--multimask', action='store_true', default=False)
     parser.add_argument('--max_points', type=int, default=10)
+    parser.add_argument(
+        '--json_enforce',
+        choices=['none', 'tools', 'guided'],
+        default='guided',
+        help='Enforce JSON outputs via tool-calling or guided decoding.'
+    )
 
     args = parser.parse_args()
     # Retrieve dataset directory and prompts file
@@ -625,9 +804,10 @@ def main():
         overlays_dir=args.overlays_dir,
         multimask=args.multimask,
         max_points=args.max_points,
+        json_enforce=args.json_enforce,
     )
     save_path = get_save_path(
-        "binary",
+        args.task,
         args.dataset,
         args.model,
         gpt_model_name=(args.gpt_model if args.model == 'gpt' else args.model),
