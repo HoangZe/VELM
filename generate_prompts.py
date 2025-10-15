@@ -39,8 +39,6 @@ def make_localize_prompt(category: str, guidance_text: str) -> str:
         "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02 to 0.03 of image size), NOT the entire object/opening.\n"
     )
 
-# generate_prompts.py
-
 def _extract_text(v) -> str:
     """Descriptions may be str or [title, text]; normalize to plain text."""
     if isinstance(v, list):
@@ -78,8 +76,6 @@ def combine_guidance_for_category(descriptions: Dict, category: str) -> str:
             parts.append(f"- {k.replace('_',' ').title()}: {txt}")
 
     return "Guidance per defect type:\n" + "\n".join(parts) if parts else ""
-
-# generate_prompts.py
 
 def collect_prompts(
     data_dir: Path,
