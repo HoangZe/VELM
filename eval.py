@@ -13,8 +13,6 @@ from sklearn.metrics import (
     f1_score,
     confusion_matrix,
     roc_auc_score,
-    average_precision_score,
-    roc_curve,
 )
 
 from utils import load_json
@@ -24,6 +22,55 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def load_score_map(score_path: Path, target_hw: tuple[int,int]) -> np.ndarray:
+    """Load score map (.npy float32 or PNG fallback) and resize to target HxW in [0,1]."""
+    if score_path.suffix.lower() == ".npy":
+        s = np.load(score_path).astype(np.float32)
+    else:
+        s = np.array(Image.open(score_path).convert("L"), dtype=np.float32) / 255.0
+    if s.shape != target_hw:
+        s = np.array(Image.fromarray((s*255).astype(np.uint8)).resize((target_hw[1], target_hw[0]), resample=Image.BILINEAR)) / 255.0
+    return np.clip(s, 0.0, 1.0)
+
+def auroc_from_scores(y_true: np.ndarray, y_score: np.ndarray) -> float:
+    """Safe AUROC (returns 0.5 if only one class present)."""
+    y_true = y_true.astype(np.uint8).ravel()
+    y_score = y_score.astype(np.float32).ravel()
+    if y_true.min() == y_true.max():  # edge case: only one class
+        return 0.5
+    return float(roc_auc_score(y_true, y_score))
+
+def aupro_from_scores(y_true: np.ndarray, y_score: np.ndarray, fpr_cap: float = 0.3, steps: int = 101) -> float:
+    """
+    Approximate AUPRO: threshold y_score ∈ [0,1] and integrate region-overlap (≈ recall)
+    up to an FPR cap (default 30%) as used in MVTec AD. See Bergmann et al. for PRO/AUPRO. 
+    """
+    y_true = y_true.astype(np.uint8)
+    y_score = np.clip(y_score.astype(np.float32), 0.0, 1.0)
+    H, W = y_true.shape
+    neg_count = (y_true == 0).sum()
+    if neg_count == 0:
+        return 0.0
+    ts = np.linspace(0.0, 1.0, steps)
+    fprs, pros = [], []
+    for t in ts:
+        pred = (y_score >= t).astype(np.uint8)
+        tp = int(((pred == 1) & (y_true == 1)).sum())
+        fp = int(((pred == 1) & (y_true == 0)).sum())
+        fn = int(((pred == 0) & (y_true == 1)).sum())
+        fpr = fp / float(neg_count + 1e-8)
+        # PRO ~= region-wise recall; we approximate by pixel recall when CC labeling isn't available.
+        # (Anomalib/MVTec define PRO & AUPRO in detail.) 
+        recall = tp / float(tp + fn + 1e-8)
+        fprs.append(fpr); pros.append(recall)
+    # integrate up to fpr_cap
+    fprs = np.array(fprs); pros = np.array(pros)
+    sel = fprs <= fpr_cap
+    if not np.any(sel):
+        return 0.0
+    # trapz on the clipped segment; normalize by cap to get [0,1]
+    return float(np.trapz(pros[sel], fprs[sel]) / max(fpr_cap, 1e-8))
 
 class MetricsCalculator:
     """
@@ -64,7 +111,7 @@ class MetricsCalculator:
             'confusion_matrix': self.compute_confusion_matrix().tolist(),
         }
 
-# --- add: pixel-level helpers ---
+# pixel-level helpers ---
 
 def load_binary_mask(path: Path, target_hw: Optional[Tuple[int, int]] = None) -> np.ndarray:
     """
@@ -88,19 +135,6 @@ def pixel_confusion(pred: np.ndarray, gt: np.ndarray) -> Tuple[int,int,int,int]:
     fn = int(((pred == 0) & (gt == 1)).sum())
     tn = int(((pred == 0) & (gt == 0)).sum())
     return tp, fp, fn, tn
-
-def iou_dice_from_counts(tp: int, fp: int, fn: int) -> Tuple[float, float]:
-    denom_iou = (tp + fp + fn)
-    denom_dice = (2*tp + fp + fn)
-    iou = float(tp) / denom_iou if denom_iou > 0 else 0.0
-    dice = float(2*tp) / denom_dice if denom_dice > 0 else 0.0
-    return iou, dice
-
-def pixel_prec_rec_f1(tp:int, fp:int, fn:int) -> Tuple[float,float,float]:
-    prec = float(tp) / (tp + fp) if (tp + fp) > 0 else 0.0
-    rec  = float(tp) / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1   = (2*prec*rec) / (prec + rec) if (prec + rec) > 0 else 0.0
-    return prec, rec, f1
 
 def parse_key_for_gt(key: str) -> Tuple[str,str,str]:
     """
@@ -273,81 +307,102 @@ def evaluate_pixel_masks(
     data_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
-    Evaluate pixel-level anomaly localization for datasets with GT masks.
-    Uses the binary masks saved by the SAM-2 stage in the predictions JSON
-    (obj['sam2']['top1_path']).
-    Returns per-category and overall IoU, Dice (F1), pixel-precision/recall.
-
-    Notes:
-      - Designed for MVTec AD/AC folder layout (binary masks under ground_truth).
-      - If a sample's GT mask file doesn't exist (e.g., 'good' images), it is skipped.
+    Evaluate pixel-level anomaly localization using soft score maps saved by the SAM-2 stage.
+    Returns per-category and overall AUROC, AUPRO (<=30% FPR), and pixel-F1 at a fixed threshold (0.5).
     """
     preds = load_json(predictions_path)
     if data_root is None:
-        # default dataset roots under ./datasets/<dataset_name>
         data_root = Path.cwd() / "datasets" / dataset
 
-    per_cat_counts: Dict[str, Dict[str,int]] = {}  # {cat: {'tp':..,'fp':..,'fn':..}}
-    num_images: Dict[str,int] = {}
+    # per-category accumulators
+    cat_scores: Dict[str, List[np.ndarray]] = {}
+    cat_gts: Dict[str, List[np.ndarray]] = {}
 
     for key, obj in preds.items():
         try:
             category, defect, img_id = parse_key_for_gt(key)
         except Exception:
             continue
-        # only evaluate defective samples that have GT masks
         if defect == "good":
             continue
-        # predicted mask from SAM-2
+
         sam2_info = obj.get("sam2", {})
-        pred_path = sam2_info.get("top1_path")
-        if not pred_path or not os.path.exists(pred_path):
+        score_path = sam2_info.get("score_path")
+        pred_mask_path = sam2_info.get("top1_path")
+        if not (score_path and os.path.exists(score_path)) and not (pred_mask_path and os.path.exists(pred_mask_path)):
             continue
 
-        # ground-truth mask (MVTec AD/AC convention)
         gt_path = gt_mask_path_for_mvtec(data_root, category, defect, img_id)
         if not gt_path.exists():
-            # no GT mask -> skip
             continue
 
         gt = load_binary_mask(gt_path)
-        pred = load_binary_mask(Path(pred_path), target_hw=gt.shape)  # ensure H,W match
+        H, W = gt.shape
 
-        tp, fp, fn, _ = pixel_confusion(pred, gt)
-        if category not in per_cat_counts:
-            per_cat_counts[category] = {'tp':0,'fp':0,'fn':0}
-            num_images[category] = 0
-        per_cat_counts[category]['tp'] += tp
-        per_cat_counts[category]['fp'] += fp
-        per_cat_counts[category]['fn'] += fn
-        num_images[category] += 1
+        if score_path and os.path.exists(score_path):
+            score = load_score_map(Path(score_path), (H, W))
+        else:
+            # fallback: use hard mask as a degenerate score (disfavored)
+            score = load_binary_mask(Path(pred_mask_path), target_hw=gt.shape).astype(np.float32)
 
-    # aggregate per category
+        cat_scores.setdefault(category, []).append(score)
+        cat_gts.setdefault(category, []).append(gt.astype(np.uint8))
+
     per_category: Dict[str, Any] = {}
-    all_tp = all_fp = all_fn = 0
-    for cat, c in per_cat_counts.items():
-        iou, dice = iou_dice_from_counts(c['tp'], c['fp'], c['fn'])
-        prec, rec, f1 = pixel_prec_rec_f1(c['tp'], c['fp'], c['fn'])
-        per_category[cat] = {
-            'num_images': num_images.get(cat, 0),
-            'IoU': iou,
-            'Dice': dice,
-            'pixel_precision': prec,
-            'pixel_recall': rec,
-            'pixel_F1': f1,
-        }
-        all_tp += c['tp']; all_fp += c['fp']; all_fn += c['fn']
+    all_scores = []; all_gts = []
 
-    # overall (micro-average)
-    overall_iou, overall_dice = iou_dice_from_counts(all_tp, all_fp, all_fn)
-    overall_prec, overall_rec, overall_f1 = pixel_prec_rec_f1(all_tp, all_fp, all_fn)
-    overall = {
-        'IoU': overall_iou,
-        'Dice': overall_dice,
-        'pixel_precision': overall_prec,
-        'pixel_recall': overall_rec,
-        'pixel_F1': overall_f1,
-    }
+    for cat in sorted(cat_scores.keys()):
+        if not cat_scores[cat]:
+            continue
+        S = np.stack([s for s in cat_scores[cat]], axis=0)
+        G = np.stack([g for g in cat_gts[cat]], axis=0)
+        auroc = auroc_from_scores(G, S)
+
+        # AUPRO up to 30% FPR, averaged over images
+        aupros = []
+        for i in range(S.shape[0]):
+            aupros.append(aupro_from_scores(G[i], S[i], fpr_cap=0.30))
+        aupro = float(np.mean(aupros)) if aupros else 0.0
+
+        # pixel-F1 at 0.5 threshold (simple, comparable)
+        pred_bin = (S >= 0.5).astype(np.uint8)
+        tp = int(((pred_bin == 1) & (G == 1)).sum())
+        fp = int(((pred_bin == 1) & (G == 0)).sum())
+        fn = int(((pred_bin == 0) & (G == 1)).sum())
+        prec = float(tp) / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec  = float(tp) / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1   = (2*prec*rec)/(prec+rec) if (prec+rec) > 0 else 0.0
+
+        per_category[cat] = {
+            'num_images': int(S.shape[0]),
+            'AUROC': auroc,
+            'AUPRO_30': aupro,
+            'pixel_F1@0.5': f1,
+        }
+
+        all_scores.append(S.reshape(-1))
+        all_gts.append(G.reshape(-1))
+
+    # overall (micro): concatenate all pixels
+    if all_scores:
+        S_all = np.concatenate(all_scores, axis=0)
+        G_all = np.concatenate(all_gts, axis=0)
+        overall = {
+            'AUROC': auroc_from_scores(G_all, S_all),
+            'AUPRO_30': aupro_from_scores(G_all.reshape(1,-1)[0].reshape(1, -1).reshape(-1,).reshape(1, -1)[0],  # harmless no-op
+                                          S_all.reshape(1,-1)[0], fpr_cap=0.30),  # uses the same one-image routine
+            'pixel_F1@0.5': (lambda _S, _G: (
+                (lambda tp,fp,fn: ((2*(tp/(tp+fp))*(tp/(tp+fn))) /
+                                   (((tp/(tp+fp))+(tp/(tp+fn))) if ((tp+fp)>0 and (tp+fn)>0) else 1e9)
+                                   if ((tp+fp)>0 and (tp+fn)>0) else 0.0))
+            )(
+                int(((_S>=0.5) & (_G==1)).sum()),
+                int(((_S>=0.5) & (_G==0)).sum()),
+                int(((_S<0.5)  & (_G==1)).sum())
+            ))(S_all, G_all)
+        }
+    else:
+        overall = {'AUROC': 0.0, 'AUPRO_30': 0.0, 'pixel_F1@0.5': 0.0}
 
     return {'per_category': per_category, 'overall': overall}
 

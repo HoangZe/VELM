@@ -56,6 +56,15 @@ class Sam2Adapter:
         for m in mask_list:
             acc |= m.astype(bool)
         return (acc.astype(np.uint8) * 255)
+    
+    @staticmethod
+    def union_scores(score_list: List[np.ndarray]) -> np.ndarray:
+        if not score_list:
+            raise ValueError("No scores to union.")
+        acc = score_list[0].astype(np.float32).copy()
+        for s in score_list[1:]:
+            acc = np.maximum(acc, s.astype(np.float32))
+        return np.clip(acc, 0.0, 1.0)
 
     @staticmethod
     def save_mask(mask: np.ndarray, path: Path, hw_expected: Optional[tuple[int,int]] = None) -> None:
