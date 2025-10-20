@@ -464,7 +464,7 @@ def run_llm(
             else:  # visa_ac
                 ref_cat = 'pipe_fryum' if object_cat == 'pipe' else object_cat
                 ref_dir = data_dir / ref_cat / 'test' / 'good'
-            ref_files = [f for f in os.listdir(ref_dir) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+            ref_files = sorted(f for f in os.listdir(ref_dir) if f.lower().endswith(('.jpg','.png','.jpeg')))
             if not ref_files:
                 raise FileNotFoundError(f"No valid reference images found in {ref_dir}")
             ref_path = ref_dir / ref_files[0]
@@ -526,88 +526,97 @@ def run_llm(
             pos_px = np.array([[p['x']*W, p['y']*H] for p in pos], dtype=np.float32)
             neg_px = np.array([[p['x']*W, p['y']*H] for p in neg], dtype=np.float32) if neg else None
 
-            # --- if no negative points, synthesize a small 'ring' around positives
-            if (neg_px is None or len(neg_px) == 0) and len(pos_px) >= 1:
-                x0, y0 = pos_px.min(axis=0); x1, y1 = pos_px.max(axis=0)
-                cx, cy = (x0+x1)/2.0, (y0+y1)/2.0
-                r = max(6.0, 0.02*max(W, H))
-                neg_px = np.array([
-                    [min(max(cx - 2*r, 0), W-1), cy],
-                    [min(max(cx + 2*r, 0), W-1), cy],
-                    [cx, min(max(cy - 2*r, 0), H-1)],
-                    [cx, min(max(cy + 2*r, 0), H-1)],
-                ], dtype=np.float32)
-
-            # utility: coverage score (positives high, negatives low)
-            def coverage(mask_u8, pts):
-                if pts is None or len(pts) == 0: return 0.0
+            box_px = None
+            def _coverage(mask_u8, pts):
+                if pts is None or len(pts) == 0: 
+                    return 0.0
                 h, w = mask_u8.shape
                 ii = np.clip(np.round(pts[:, 1]).astype(int), 0, h-1)
                 jj = np.clip(np.round(pts[:, 0]).astype(int), 0, w-1)
                 return float(mask_u8[ii, jj].mean()) / 255.0
-            def score(mask, p, n):
-                return coverage(mask, p) - 0.5*coverage(mask, n)
 
-            # --- try four coordinate conventions: xy, yx, xy_yflip, yx_yflip
-            def predict(pos_c, neg_c):
-                masks, scores, logits = sam_adapter.predict_region(
-                    pos_pts_px=pos_c if pos_c is not None else np.empty((0,2), np.float32),
-                    neg_pts_px=neg_c,
-                    box_px=None,
-                    multimask_output=multimask,
-                )
-                k = int(np.argmax(scores))
-                mask_u8 = (masks[k].astype(np.uint8) * 255)
-                # logits -> soft score map in [0,1]
-                lg = np.array(logits[k])
-                if lg.ndim > 2: lg = lg.squeeze()
-                prob = 1.0 / (1.0 + np.exp(-lg.astype(np.float32)))
-                if prob.shape != mask_u8.shape:
-                    # resize prob to HxW if SAM logits are low-res
-                    prob = np.array(Image.fromarray((prob*255).astype(np.uint8)).resize(
-                        (mask_u8.shape[1], mask_u8.shape[0]), resample=Image.BILINEAR)) / 255.0
-                return mask_u8, prob
+            # try as-is (x,y)
+            masks, scores, _logits = sam_adapter.predict_region(
+                pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask
+            )
+            k = int(np.argmax(scores))
+            mask_u8_xy = (masks[k].astype(np.uint8) * 255)
 
-            pos_xy = pos_px
-            neg_xy = neg_px
+            # try swapped (y,x) in case LLM returned row/col
             pos_yx = pos_px[:, [1, 0]]
             neg_yx = neg_px[:, [1, 0]] if neg_px is not None else None
-            pos_xy_yflip = np.stack([pos_px[:,0], (H-1) - pos_px[:,1]], axis=1)
-            neg_xy_yflip = np.stack([neg_px[:,0], (H-1) - neg_px[:,1]], axis=1) if neg_px is not None else None
-            pos_yx_yflip = np.stack([pos_yx[:,0], (W-1) - pos_yx[:,1]], axis=1)
-            neg_yx_yflip = np.stack([neg_yx[:,0], (W-1) - neg_yx[:,1]], axis=1) if neg_yx is not None else None
+            masks2, scores2, _logits2 = sam_adapter.predict_region(
+                pos_pts_px=pos_yx, neg_pts_px=neg_yx, box_px=box_px, multimask_output=multimask
+            )
+            k2 = int(np.argmax(scores2))
+            mask_u8_yx = (masks2[k2].astype(np.uint8) * 255)
 
-            candidates = [
-                ("xy",       * predict(pos_xy,       neg_xy)),
-                ("yx",       * predict(pos_yx,       neg_yx)),
-                ("xy_yflip", * predict(pos_xy_yflip, neg_xy_yflip)),
-                ("yx_yflip", * predict(pos_yx_yflip, neg_yx_yflip)),
-            ]
-            # pick by coverage score
-            best = None; best_val = -1e9
-            for tag, m_u8, p_map in candidates:
-                if tag == "xy":       sc = score(m_u8, pos_xy,       neg_xy)
-                elif tag == "yx":     sc = score(m_u8, pos_yx,       neg_yx)
-                elif tag == "xy_yflip": sc = score(m_u8, pos_xy_yflip, neg_xy_yflip)
-                else:                 sc = score(m_u8, pos_yx_yflip,  neg_yx_yflip)
-                if sc > best_val:
-                    best = (m_u8, p_map)
-                    best_val = sc
+            # choose orientation by positive-vs-negative coverage
+            def _score(mask, p, n):
+                return _coverage(mask, p) - 0.5*_coverage(mask, n)
 
-            rmask, rprob = best
+            score_xy = _score(mask_u8_xy, pos_px,  neg_px)
+            score_yx = _score(mask_u8_yx, pos_yx,  neg_yx)
+            use_yx   = score_yx > score_xy
+            mask_u8  = mask_u8_yx if use_yx else mask_u8_xy
+            pos_best = pos_yx if use_yx else pos_px
+            neg_best = neg_yx if use_yx else neg_px
+
+            # one-time polarity flip if negatives are covered more than positives
+            if _coverage(mask_u8, pos_best) < _coverage(mask_u8, neg_best):
+                masks3, scores3, _logits3 = sam_adapter.predict_region(
+                    pos_pts_px=neg_best if neg_best is not None else np.empty((0,2), np.float32),
+                    neg_pts_px=pos_best,
+                    box_px=box_px,
+                    multimask_output=multimask
+                )
+                mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
+
+            # optional box from positives; keeps your original behavior
+            if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
+                x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
+                pad = 0.05 * max(W, H)
+                box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
+
+            if 'bbox' in region:
+                x0, y0, x1, y1 = region['bbox']
+                box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
+
+            # final predict using the resolved polarity/orientation/box
+            masks_final, scores_final, logits_final = sam_adapter.predict_region(
+                pos_pts_px=pos_best if pos_best is not None else np.empty((0,2), np.float32),
+                neg_pts_px=neg_best,
+                box_px=box_px,
+                multimask_output=multimask,
+            )
+            kf = int(np.argmax(scores_final))
+            rmask = (masks_final[kf].astype(np.uint8) * 255)
+
+            # build a FLOAT soft score map from logits for AUROC/AUPRO
+            lg = np.array(logits_final[kf])
+            if lg.ndim > 2:
+                lg = lg.squeeze()
+            prob = 1.0 / (1.0 + np.exp(-lg.astype(np.float32)))  # sigmoid on logits (float)
+            if prob.shape != (H, W):
+                # resize in FLOAT, never quantize before resize
+                prob_img = Image.fromarray(prob.astype(np.float32), mode='F')
+                prob_img = prob_img.resize((W, H), resample=Image.BILINEAR)
+                prob = np.asarray(prob_img, dtype=np.float32)
+
             rpath = masks_root / f"{key}__r{r_idx}.png"
             Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
             region_masks.append(rmask)
-            region_scores.append(rprob.astype(np.float32))
             region_paths.append(str(rpath))
+            region_scores.append(prob)  # AUROC/AUPRO soft map for this region
+
 
         final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
-         # one-shot correction if region area > 20% (total failure guard)
+        # one-shot correction if region area > 15% (total failure guard)
         area_ratio = float((final_mask > 0).sum()) / float(H * W)
-        if obj.get("label") == "anomalous" and area_ratio > 0.20 and not obj.get("_retry_done", False):
+        if obj.get("label") == "anomalous" and area_ratio > 0.15 and not obj.get("_retry_done", False):
             strict_text = text + (
                 "\n\nOne-shot correction:\n"
-                "- Your last region covered more than 20% of the image, which violates the small-defect rule.\n"
+                "- Your last region covered more than 15% of the image, which violates the small-defect rule.\n"
                 "- Re-analyze Image B and RETURN A NEW JSON with a much smaller, tighter region around the most salient defect.\n"
                 "- Keep coordinates normalized [0,1], top-left origin, y down. Use 3-6 positive points inside the smallest visible defect and 2-4 negatives tightly around it."
             )
@@ -637,80 +646,88 @@ def run_llm(
                     pos_px = np.array([[p['x']*W, p['y']*H] for p in pos], dtype=np.float32)
                     neg_px = np.array([[p['x']*W, p['y']*H] for p in neg], dtype=np.float32) if neg else None
 
-                    # if no negative points, synthesize a small 'ring' around positives
-                    if (neg_px is None or len(neg_px) == 0) and len(pos_px) >= 1:
-                        x0, y0 = pos_px.min(axis=0); x1, y1 = pos_px.max(axis=0)
-                        cx, cy = (x0+x1)/2.0, (y0+y1)/2.0
-                        r = max(6.0, 0.02*max(W, H))
-                        neg_px = np.array([
-                            [min(max(cx - 2*r, 0), W-1), cy],
-                            [min(max(cx + 2*r, 0), W-1), cy],
-                            [cx, min(max(cy - 2*r, 0), H-1)],
-                            [cx, min(max(cy + 2*r, 0), H-1)],
-                        ], dtype=np.float32)
-
-                    # utility: coverage score (positives high, negatives low)
-                    def coverage(mask_u8, pts):
-                        if pts is None or len(pts) == 0: return 0.0
+                    box_px = None
+                    def _coverage(mask_u8, pts):
+                        if pts is None or len(pts) == 0: 
+                            return 0.0
                         h, w = mask_u8.shape
                         ii = np.clip(np.round(pts[:, 1]).astype(int), 0, h-1)
                         jj = np.clip(np.round(pts[:, 0]).astype(int), 0, w-1)
                         return float(mask_u8[ii, jj].mean()) / 255.0
-                    def score(mask, p, n):
-                        return coverage(mask, p) - 0.5*coverage(mask, n)
 
-                    # try four coordinate conventions: xy, yx, xy_yflip, yx_yflip
-                    def predict(pos_c, neg_c):
-                        masks, scores, logits = sam_adapter.predict_region(
-                            pos_pts_px=pos_c if pos_c is not None else np.empty((0,2), np.float32),
-                            neg_pts_px=neg_c,
-                            box_px=None,
-                            multimask_output=multimask,
-                        )
-                        k = int(np.argmax(scores))
-                        mask_u8 = (masks[k].astype(np.uint8) * 255)
-                        # logits -> soft score map in [0,1]
-                        lg = np.array(logits[k])
-                        if lg.ndim > 2: lg = lg.squeeze()
-                        prob = 1.0 / (1.0 + np.exp(-lg.astype(np.float32)))
-                        if prob.shape != mask_u8.shape:
-                            # resize prob to HxW if SAM logits are low-res
-                            prob = np.array(Image.fromarray((prob*255).astype(np.uint8)).resize(
-                                (mask_u8.shape[1], mask_u8.shape[0]), resample=Image.BILINEAR)) / 255.0
-                        return mask_u8, prob
+                    # try as-is (x,y)
+                    masks, scores, _logits = sam_adapter.predict_region(
+                        pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask
+                    )
+                    k = int(np.argmax(scores))
+                    mask_u8_xy = (masks[k].astype(np.uint8) * 255)
 
-                    pos_xy = pos_px
-                    neg_xy = neg_px
+                    # try swapped (y,x) in case LLM returned row/col
                     pos_yx = pos_px[:, [1, 0]]
                     neg_yx = neg_px[:, [1, 0]] if neg_px is not None else None
-                    pos_xy_yflip = np.stack([pos_px[:,0], (H-1) - pos_px[:,1]], axis=1)
-                    neg_xy_yflip = np.stack([neg_px[:,0], (H-1) - neg_px[:,1]], axis=1) if neg_px is not None else None
-                    pos_yx_yflip = np.stack([pos_yx[:,0], (W-1) - pos_yx[:,1]], axis=1)
-                    neg_yx_yflip = np.stack([neg_yx[:,0], (W-1) - neg_yx[:,1]], axis=1) if neg_yx is not None else None
+                    masks2, scores2, _logits2 = sam_adapter.predict_region(
+                        pos_pts_px=pos_yx, neg_pts_px=neg_yx, box_px=box_px, multimask_output=multimask
+                    )
+                    k2 = int(np.argmax(scores2))
+                    mask_u8_yx = (masks2[k2].astype(np.uint8) * 255)
 
-                    candidates = [
-                        ("xy",       * predict(pos_xy,       neg_xy)),
-                        ("yx",       * predict(pos_yx,       neg_yx)),
-                        ("xy_yflip", * predict(pos_xy_yflip, neg_xy_yflip)),
-                        ("yx_yflip", * predict(pos_yx_yflip, neg_yx_yflip)),
-                    ]
-                    # pick by coverage score
-                    best = None; best_val = -1e9
-                    for tag, m_u8, p_map in candidates:
-                        if tag == "xy":       sc = score(m_u8, pos_xy,       neg_xy)
-                        elif tag == "yx":     sc = score(m_u8, pos_yx,       neg_yx)
-                        elif tag == "xy_yflip": sc = score(m_u8, pos_xy_yflip, neg_xy_yflip)
-                        else:                 sc = score(m_u8, pos_yx_yflip,  neg_yx_yflip)
-                        if sc > best_val:
-                            best = (m_u8, p_map)
-                            best_val = sc
+                    # choose orientation by positive-vs-negative coverage
+                    def _score(mask, p, n):
+                        return _coverage(mask, p) - 0.5*_coverage(mask, n)
 
-                    rmask, rprob = best
+                    score_xy = _score(mask_u8_xy, pos_px,  neg_px)
+                    score_yx = _score(mask_u8_yx, pos_yx,  neg_yx)
+                    use_yx   = score_yx > score_xy
+                    mask_u8  = mask_u8_yx if use_yx else mask_u8_xy
+                    pos_best = pos_yx if use_yx else pos_px
+                    neg_best = neg_yx if use_yx else neg_px
+
+                    # one-time polarity flip if negatives are covered more than positives
+                    if _coverage(mask_u8, pos_best) < _coverage(mask_u8, neg_best):
+                        masks3, scores3, _logits3 = sam_adapter.predict_region(
+                            pos_pts_px=neg_best if neg_best is not None else np.empty((0,2), np.float32),
+                            neg_pts_px=pos_best,
+                            box_px=box_px,
+                            multimask_output=multimask
+                        )
+                        mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
+
+                    # optional box from positives; keeps your original behavior
+                    if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
+                        x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
+                        pad = 0.05 * max(W, H)
+                        box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
+
+                    if 'bbox' in region:
+                        x0, y0, x1, y1 = region['bbox']
+                        box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
+
+                    # final predict using the resolved polarity/orientation/box
+                    masks_final, scores_final, logits_final = sam_adapter.predict_region(
+                        pos_pts_px=pos_best if pos_best is not None else np.empty((0,2), np.float32),
+                        neg_pts_px=neg_best,
+                        box_px=box_px,
+                        multimask_output=multimask,
+                    )
+                    kf = int(np.argmax(scores_final))
+                    rmask = (masks_final[kf].astype(np.uint8) * 255)
+
+                    # build a FLOAT soft score map from logits for AUROC/AUPRO
+                    lg = np.array(logits_final[kf])
+                    if lg.ndim > 2:
+                        lg = lg.squeeze()
+                    prob = 1.0 / (1.0 + np.exp(-lg.astype(np.float32)))  # sigmoid on logits (float)
+                    if prob.shape != (H, W):
+                        # resize in FLOAT, never quantize before resize
+                        prob_img = Image.fromarray(prob.astype(np.float32), mode='F')
+                        prob_img = prob_img.resize((W, H), resample=Image.BILINEAR)
+                        prob = np.asarray(prob_img, dtype=np.float32)
+
                     rpath = masks_root / f"{key}__r{r_idx}.png"
                     Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
                     region_masks.append(rmask)
-                    region_scores.append(rprob.astype(np.float32))
                     region_paths.append(str(rpath))
+                    region_scores.append(prob)  # AUROC/AUPRO soft map for this region
 
                 final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
             except Exception as _:
