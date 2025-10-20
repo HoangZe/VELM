@@ -781,46 +781,42 @@ def main():
     # Initialise backend model/processor
     if args.model == 'qwen':
         model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen3-VL-30B-A3B-Instruct", torch_dtype="auto", device_map="auto"
+            "Qwen/Qwen3-VL-30B-A3B-Instruct", dtype="auto", device_map="auto"
         )
         processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-30B-A3B-Instruct")
-        client = None
     elif args.model == 'llama':
         hf_token = os.getenv("llama_access")
         model = MllamaForConditionalGeneration.from_pretrained(
             "meta-llama/Llama-3.2-11B-Vision-Instruct",
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="auto",
             token=hf_token
         )
         processor = AutoProcessor.from_pretrained(
             "meta-llama/Llama-3.2-11B-Vision-Instruct", token=hf_token
         )
-        client = None
     elif args.model == 'llava':
         hf_token = os.getenv("llama_access")
         model = LlavaNextForConditionalGeneration.from_pretrained(
             "llava-hf/llava-v1.6-mistral-7b-hf",
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="auto",
             token=hf_token
         )
         processor = LlavaNextProcessor.from_pretrained(
             "llava-hf/llava-v1.6-mistral-7b-hf", token=hf_token
         )
-        client = None
     elif args.model == 'gemma':
         hf_token = os.getenv("llama_access")
         model = Gemma3ForConditionalGeneration.from_pretrained(
             "google/gemma-3-12b-it",
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             device_map="auto",
             token=hf_token
         )
         processor = AutoProcessor.from_pretrained(
             "google/gemma-3-12b-it", token=hf_token
         )
-        client = None
     else:
         raise ValueError(f"Unsupported model type: {args.model}")
     # Execute inference
