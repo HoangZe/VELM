@@ -1,21 +1,15 @@
 import os
-import base64
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
-from io import BytesIO
 from PIL import Image
 from tqdm import tqdm
-from dotenv import load_dotenv
 import torch
 import numpy as np
-from openai import OpenAI
 from transformers import Qwen3VLMoeForConditionalGeneration, Qwen3VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor, Gemma3ForConditionalGeneration
 from qwen_vl_utils import process_vision_info
 from utils import load_json, save_json, get_save_path, parse_llm_json
 from sam_adapter import Sam2Adapter
 import re, json
-from typing import Callable
-from transformers import StoppingCriteria, StoppingCriteriaList
 
 try:
     from lmformatenforcer import JsonSchemaParser
@@ -24,7 +18,7 @@ except Exception:
     JsonSchemaParser = None
     build_transformers_prefix_allowed_tokens_fn = None
 
-# --- add: a single JSON schema your models must emit ---
+# a single JSON schema the LLM must emit
 def build_anomaly_json_schema() -> dict:
     # normalized in [0,1]
     coord = {"type": "number", "minimum": 0.0, "maximum": 1.0}
@@ -60,7 +54,7 @@ def build_anomaly_json_schema() -> dict:
         "additionalProperties": False
     }
 
-# --- add: build a single, universal message list for all backends ---
+# build a single, universal message list for all backends
 def build_messages_for_images(imgs, instruction_text: str, system_text: str | None = None):
     """
     Universal multimodal messages for HF chat templates.
@@ -79,68 +73,6 @@ def build_messages_for_images(imgs, instruction_text: str, system_text: str | No
         ],
     })
     return messages
-
-def encode_image(image: Image.Image) -> str:
-    """
-    Encode a PIL Image to base64 string.
-
-    Args:
-        image: PIL Image to encode
-
-    Returns:
-        str: Base64 encoded image string
-    """
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    return img_str
-
-
-def get_gpt_output(
-    client: OpenAI,
-    images: List[str],
-    text: str,
-    model_name: str,
-) -> Tuple[str, Dict[str, int]]:
-    """
-    Query an OpenAI GPT model with a pair of images and a text prompt.
-
-    The GPT API uses a chat format where each message may contain multiple
-    images.  For binary anomaly detection only the first two images in
-    ``images`` are considered: the reference (good) image and the query
-    image.  The ``heatmap_mode`` parameter is accepted for backwards
-    compatibility but ignored.
-
-    Args:
-        client: OpenAI client instance.
-        images: List of base64-encoded images.  Only the first two entries
-            are used.
-        text: Prompt text instructing the model to respond ``anomalous``
-            or ``normal``.
-        model_name: Name of the GPT model variant to use.
-
-    Returns:
-        Tuple[str, Dict[str, int]]: The model's text response and token usage
-            statistics.
-    """
-    # Ensure we have at least two images; ignore extras
-    ref_img, query_img = images[:2]
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": text},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{ref_img}"}},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{query_img}"}},
-            ],
-        }
-    ]
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        temperature=0.0,
-    )
-    return response.choices[0].message.content, response.usage
 
 def get_qwen_output(
     model: Any,
@@ -471,10 +403,8 @@ def run_llm(
     data_dir: Path,
     num_ref: int,
     dataset: str,
-    client: Optional[OpenAI] = None,
     model: Optional[Any] = None,
     processor: Optional[Any] = None,
-    gpt_model_name: str = "gpt-4o",
     *,
     task: str = "localize",
     sam2_repo: str = "facebook/sam2.1-hiera-large",
@@ -496,17 +426,15 @@ def run_llm(
     ``normal``.
 
     Args:
-        model_type: One of 'gpt', 'qwen', 'llama', 'llava' or 'gemma'.
+        model_type: One of 'qwen', 'llama', 'llava' or 'gemma'.
         prompts_dict: Mapping from sample keys to dictionaries containing
             'image' (path to the query image) and 'text' (prompt text).
         data_dir: Root of the dataset (e.g. datasets/mvtec_ad).
         image_size: Side length to resize images to before inference.
         num_ref: Number of reference images to use.
         dataset: Dataset name ('mvtec_ad', 'mvtec_ac', 'visa_ac').
-        client: OpenAI client instance when model_type=='gpt'.
         model: Model instance for HF backends.
         processor: Processor associated with the HF model.
-        gpt_model_name: Name of the GPT variant when model_type=='gpt'.
 
     Returns:
         Dict[str, str]: Dictionary mapping sample keys to raw model responses.
@@ -541,60 +469,47 @@ def run_llm(
                 raise FileNotFoundError(f"No valid reference images found in {ref_dir}")
             ref_path = ref_dir / ref_files[0]
             ref_img = Image.open(ref_path).convert('RGB')
-            if model_type == 'gpt':
-                images.append(encode_image(ref_img))
-            else:
-                images.append(ref_img)
+            images.append(ref_img)
         # Load query image from prompts_dict
         query_path = value['image']
         query_img = Image.open(query_path).convert('RGB')
-        if model_type == 'gpt':
-            images.append(encode_image(query_img))
-        else:
-            images.append(query_img)
+        images.append(query_img)
         # Retrieve prompt text
         text = value['text']
-        # --- Enforce-JSON strategy selection (works for all HF backends) ---
+        # Enforce-JSON strategy selection
         obj = None
         raw_text = None
-        if model_type == 'gpt':
-            # If you still use GPT, you can also force JSON with OpenAI JSON mode.
-            response, usage = get_gpt_output(client, images if isinstance(images[0], str) else [encode_image(images[0]), encode_image(images[1])], text, gpt_model_name)
-            total_tokens += usage.total_tokens
-            raw_text = response
-            obj = json.loads(re.search(r'\{.*\}', raw_text, flags=re.S).group(0))
-        else:
+        try:
+            if json_enforce == 'tools':
+                obj, raw_text = generate_json_with_tools(model, processor, images[:2], text)
+            elif json_enforce == 'guided':
+                obj, raw_text = generate_json_with_guidance(model, processor, images[:2], text)
+            else:
+                # fall back to legacy free-form + repair
+                out = (
+                    get_qwen_output if model_type=='qwen' else
+                    get_llama_output if model_type=='llama' else
+                    get_llava_output if model_type=='llava' else
+                    get_gemma_output
+                )(model, processor, images, text)
+                raw_text = out[0]
+                obj = parse_llm_json(raw_text)
+        except Exception as e:
+            print(f"[warn] {key}: structured decode failed ({e}); trying legacy parse.")
+            if raw_text is None:
+                out = (
+                    get_qwen_output if model_type=='qwen' else
+                    get_llama_output if model_type=='llama' else
+                    get_llava_output if model_type=='llava' else
+                    get_gemma_output
+                )(model, processor, images, text)
+                raw_text = out[0]
             try:
-                if json_enforce == 'tools':
-                    obj, raw_text = generate_json_with_tools(model, processor, images[:2], text)
-                elif json_enforce == 'guided':
-                    obj, raw_text = generate_json_with_guidance(model, processor, images[:2], text)
-                else:
-                    # fall back to legacy free-form + repair
-                    out = (
-                        get_qwen_output if model_type=='qwen' else
-                        get_llama_output if model_type=='llama' else
-                        get_llava_output if model_type=='llava' else
-                        get_gemma_output
-                    )(model, processor, images, text)
-                    raw_text = out[0]
-                    obj = parse_llm_json(raw_text)
-            except Exception as e:
-                print(f"[warn] {key}: structured decode failed ({e}); trying legacy parse.")
-                if raw_text is None:
-                    out = (
-                        get_qwen_output if model_type=='qwen' else
-                        get_llama_output if model_type=='llama' else
-                        get_llava_output if model_type=='llava' else
-                        get_gemma_output
-                    )(model, processor, images, text)
-                    raw_text = out[0]
-                try:
-                    obj = parse_llm_json(raw_text)
-                except Exception as e2:
-                    print(f"[warn] {key}: JSON parse failed; marking as normal and continuing: {e2}")
-                    predictions[key] = {"label": "normal", "_parse_error": str(e2)}
-                    continue
+                obj = parse_llm_json(raw_text)
+            except Exception as e2:
+                print(f"[warn] {key}: JSON parse failed; marking as normal and continuing: {e2}")
+                predictions[key] = {"label": "normal", "_parse_error": str(e2)}
+                continue
 
         print(f"{key}: {raw_text}")
 
@@ -694,14 +609,11 @@ def run_llm(
                 "\n\nOne-shot correction:\n"
                 "- Your last region covered more than 20% of the image, which violates the small-defect rule.\n"
                 "- Re-analyze Image B and RETURN A NEW JSON with a much smaller, tighter region around the most salient defect.\n"
-                "- Keep coordinates normalized [0,1], top-left origin, y down. Use 3–6 positive points inside the smallest visible defect and 2–4 negatives tightly around it."
+                "- Keep coordinates normalized [0,1], top-left origin, y down. Use 3-6 positive points inside the smallest visible defect and 2-4 negatives tightly around it."
             )
             try:
                 # regenerate JSON with the same backend & stricter instruction
-                if model_type == 'gpt':
-                    out = get_gpt_output(client, [encode_image(ref_img), encode_image(query_img)], strict_text, gpt_model_name)
-                    raw_text_retry = out[0]; obj = parse_llm_json(raw_text_retry)
-                elif json_enforce == 'tools':
+                if json_enforce == 'tools':
                     obj, _ = generate_json_with_tools(model, processor, [ref_img, query_img], strict_text)
                 elif json_enforce == 'guided':
                     obj, _ = generate_json_with_guidance(model, processor, [ref_img, query_img], strict_text)
@@ -715,18 +627,17 @@ def run_llm(
                     obj = parse_llm_json(out[0])
                 obj["_retry_done"] = True  # avoid loops
 
-                # --- re-run the same region-processing code for obj['regions'] ---
-                # (simplest: restart this sample by continuing the outer loop)
+                # re-run the same region-processing code for obj['regions'] ---
                 # clear and redo
                 region_masks, region_scores, region_paths = [], [], []
-                # re-enter the region loop (copy/paste the block above or refactor into a helper)
+                # re-enter the region loop 
                 for r_idx, region in enumerate(obj.get('regions', [])):
                     pos = region.get('points_positive', [])[:max_points]
                     neg = region.get('points_negative', [])[:max_points]
                     pos_px = np.array([[p['x']*W, p['y']*H] for p in pos], dtype=np.float32)
                     neg_px = np.array([[p['x']*W, p['y']*H] for p in neg], dtype=np.float32) if neg else None
 
-                    # --- if no negative points, synthesize a small 'ring' around positives
+                    # if no negative points, synthesize a small 'ring' around positives
                     if (neg_px is None or len(neg_px) == 0) and len(pos_px) >= 1:
                         x0, y0 = pos_px.min(axis=0); x1, y1 = pos_px.max(axis=0)
                         cx, cy = (x0+x1)/2.0, (y0+y1)/2.0
@@ -748,7 +659,7 @@ def run_llm(
                     def score(mask, p, n):
                         return coverage(mask, p) - 0.5*coverage(mask, n)
 
-                    # --- try four coordinate conventions: xy, yx, xy_yflip, yx_yflip
+                    # try four coordinate conventions: xy, yx, xy_yflip, yx_yflip
                     def predict(pos_c, neg_c):
                         masks, scores, logits = sam_adapter.predict_region(
                             pos_pts_px=pos_c if pos_c is not None else np.empty((0,2), np.float32),
@@ -802,12 +713,6 @@ def run_llm(
                     region_paths.append(str(rpath))
 
                 final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
-                if region_scores:
-                    union_score = region_scores[0]
-                    for s in region_scores[1:]:
-                        union_score = np.maximum(union_score, s)
-                else:
-                    union_score = np.zeros((H, W), dtype=np.float32)
             except Exception as _:
                 pass  # fall back to the original mask if the retry fails
         if region_scores:
@@ -837,16 +742,9 @@ def main():
     parser.add_argument(
         '--model',
         type=str,
-        choices=['gpt', 'qwen', 'llama', 'llava', 'gemma'],
-        default='gpt',
+        choices=['qwen', 'llama', 'llava', 'gemma'],
+        default='qwen',
         help='Model backend to use.'
-    )
-    parser.add_argument(
-        '--gpt_model',
-        type=str,
-        choices=['gpt-4o', 'gpt-4o-mini'],
-        default='gpt-4o',
-        help='GPT model variant (only when --model=gpt).'
     )
     parser.add_argument(
         '--dataset',
@@ -881,12 +779,7 @@ def main():
     # Load prompts
     prompts_dict = load_json(json_file_path)
     # Initialise backend model/processor
-    if args.model == 'gpt':
-        load_dotenv()
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        model = None
-        processor = None
-    elif args.model == 'qwen':
+    if args.model == 'qwen':
         model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
             "Qwen/Qwen3-VL-30B-A3B-Instruct", torch_dtype="auto", device_map="auto"
         )
@@ -937,10 +830,8 @@ def main():
         data_dir=data_dir,
         num_ref=args.num_ref,
         dataset=args.dataset,
-        client=client,
         model=model,
         processor=processor,
-        gpt_model_name=args.gpt_model if args.model == 'gpt' else None,
         task=args.task,
         sam2_repo=args.sam2_repo,
         masks_dir=args.masks_dir,
@@ -950,10 +841,8 @@ def main():
         json_enforce=args.json_enforce,
     )
     save_path = get_save_path(
-        args.task,
         args.dataset,
         args.model,
-        gpt_model_name=(args.gpt_model if args.model == 'gpt' else args.model),
     )
     save_json(preds, save_path)
     print(f"[✓] Predictions saved to: {save_path}")

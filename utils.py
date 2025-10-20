@@ -181,75 +181,10 @@ def save_json(data: Dict[str, Any], file_path: Union[str, Path]) -> None:
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
-def get_save_path(
-    heatmap_mode: str, dataset: str, model_type: str, gpt_model_name: str = "gpt-4o"
-) -> Path:
-    """
-    Get the save path for predictions based on the task/heatmap mode and dataset.
-
-    In the original VELM framework the `heatmap_mode` parameter controlled whether
-    heatmaps (contour overlays) were used.  In the simplified binary anomaly
-    detection pipeline we no longer produce or consume heatmaps.  To avoid
-    confusion we treat any value other than "contour" as a request for plain
-    binary predictions.  Binary prediction files are suffixed with
-    `_binary_preds_<model>`.
-
-    Args:
-        heatmap_mode: Mode indicating whether heatmaps/contours are used.  Any
-            value other than "contour" results in a binary prediction file.
-        dataset: Dataset name (e.g. 'mvtec_ad', 'mvtec_ac', 'visa_ac').
-        model_type: The high-level model identifier ('gpt', 'qwen', 'llama',
-            'llava', 'gemma').
-        gpt_model_name: Name of the GPT model used (only relevant when
-            `model_type` is 'gpt').
-
-    Returns:
-        Path: Save path for predictions.
-    """
-    # Normalise the model identifier.  For GPT models include the specific
-    # variant so that different GPT variants do not overwrite each other.
-    if model_type == 'gpt':
-        model_identifier = gpt_model_name.replace('-', '_')
-    else:
-        model_identifier = model_type
-
-    # If contour heatmaps are requested, fall back to the old naming scheme to
-    # preserve backwards compatibility.  This is largely unused in the binary
-    # detection pipeline but kept here for completeness.
-    if heatmap_mode == "contour":
-        if dataset == 'mvtec_ad':
-            return (
-                Path.cwd()
-                / 'configs'
-                / 'predictions'
-                / f'mvtec_ad_preds_{model_identifier}.json'
-            )
-        if dataset == 'mvtec_ac':
-            return (
-                Path.cwd()
-                / 'configs'
-                / 'predictions'
-                / f'mvtec_ac_preds_{model_identifier}.json'
-            )
-        if dataset == 'visa_ac':
-            return (
-                Path.cwd()
-                / 'configs'
-                / 'predictions'
-                / f'visa_ac_preds_{model_identifier}.json'
-            )
-        # Unknown dataset values fall through to binary mode
-
-    # For binary detection we include the dataset name in the filename to
-    # distinguish between different datasets.  Each file is suffixed with
-    # `_binary_preds_<model_identifier>.json`.
-    return (
-        Path.cwd()
-        / 'configs'
-        / 'predictions'
-        / f'{dataset}_binary_preds_{model_identifier}.json'
-    )
-    
+def get_save_path(dataset: str, model_type: str) -> Path:
+    model_identifier = model_type.replace('-', '_')
+    return (Path.cwd() / 'configs' / 'predictions'
+            / f"{dataset}_binary_preds_{model_identifier}.json")
 
 def map_predictions(predictions: Dict[str, str], mapping: Dict[str, Dict[str, List[str]]]) -> Dict[str, str]:
     """

@@ -389,8 +389,7 @@ def evaluate_pixel_masks(
         G_all = np.concatenate(all_gts, axis=0)
         overall = {
             'AUROC': auroc_from_scores(G_all, S_all),
-            'AUPRO_30': aupro_from_scores(G_all.reshape(1,-1)[0].reshape(1, -1).reshape(-1,).reshape(1, -1)[0],  # harmless no-op
-                                          S_all.reshape(1,-1)[0], fpr_cap=0.30),  # uses the same one-image routine
+            'AUPRO_30': aupro_from_scores(G_all, S_all, fpr_cap=0.30),
             'pixel_F1@0.5': (lambda _S, _G: (
                 (lambda tp,fp,fn: ((2*(tp/(tp+fp))*(tp/(tp+fn))) /
                                    (((tp/(tp+fp))+(tp/(tp+fn))) if ((tp+fp)>0 and (tp+fn)>0) else 1e9)
@@ -481,8 +480,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--model',
         type=str,
-        choices=['gpt-4o', 'gpt-4o-mini', 'qwen', 'llama', 'llava', 'gemma'],
-        default='gpt-4o',
+        choices=['qwen', 'llama', 'llava', 'gemma'],
+        default='qwen',
         help='Model type used for predictions.'
     )
     parser.add_argument(
