@@ -4,6 +4,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from PIL import Image
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 import numpy as np
 from transformers import Qwen3VLMoeForConditionalGeneration, Qwen3VLForConditionalGeneration, AutoProcessor, MllamaForConditionalGeneration, LlavaNextForConditionalGeneration, LlavaNextProcessor, Gemma3ForConditionalGeneration
 from qwen_vl_utils import process_vision_info
@@ -73,6 +74,20 @@ def build_messages_for_images(imgs, instruction_text: str, system_text: str | No
         ],
     })
     return messages
+
+def logits_to_fullres_prob(logits, H, W):
+    # logits: (h,w) or (1,h,w) or (h,w,1) float-like
+    lg = torch.as_tensor(logits, dtype=torch.float32)
+    if lg.ndim == 3:
+        lg = lg.squeeze(0) if lg.shape[0] in (1,) else lg.squeeze(-1)
+    if lg.ndim != 2:
+        # last resort: flatten then reshape 2D if possible
+        lg = lg.view(lg.shape[-2], lg.shape[-1])
+    if lg.shape != (H, W):
+        lg = F.interpolate(lg.unsqueeze(0).unsqueeze(0), size=(H, W),
+                           mode="bilinear", align_corners=False).squeeze(0).squeeze(0)
+    prob = torch.sigmoid(lg).clamp_(0, 1).cpu().numpy().astype(np.float32)
+    return prob
 
 def get_qwen_output(
     model: Any,
@@ -572,15 +587,20 @@ def run_llm(
                 )
                 mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
 
-            # optional box from positives; keeps your original behavior
+            # FIX: keep bbox in the SAME orientation as pos_best/neg_best
+            box_px = None
+            if 'bbox' in region:
+                x0, y0, x1, y1 = region['bbox']
+                if use_yx:
+                    # LLM likely returned (y,x, y,x); swap back to (x,y) semantics
+                    x0, y0, x1, y1 = y0, x0, y1, x1
+                box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
+
+            # optional box from positives
             if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
                 x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
                 pad = 0.05 * max(W, H)
                 box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
-
-            if 'bbox' in region:
-                x0, y0, x1, y1 = region['bbox']
-                box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
 
             # final predict using the resolved polarity/orientation/box
             masks_final, scores_final, logits_final = sam_adapter.predict_region(
@@ -593,15 +613,8 @@ def run_llm(
             rmask = (masks_final[kf].astype(np.uint8) * 255)
 
             # build a FLOAT soft score map from logits for AUROC/AUPRO
-            lg = np.array(logits_final[kf])
-            if lg.ndim > 2:
-                lg = lg.squeeze()
-            prob = 1.0 / (1.0 + np.exp(-lg.astype(np.float32)))  # sigmoid on logits (float)
-            if prob.shape != (H, W):
-                # resize in FLOAT, never quantize before resize
-                prob_img = Image.fromarray(prob.astype(np.float32), mode='F')
-                prob_img = prob_img.resize((W, H), resample=Image.BILINEAR)
-                prob = np.asarray(prob_img, dtype=np.float32)
+            prob = logits_to_fullres_prob(logits_final[kf], H, W)
+
 
             rpath = masks_root / f"{key}__r{r_idx}.png"
             Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
@@ -616,7 +629,7 @@ def run_llm(
         if obj.get("label") == "anomalous" and area_ratio > 0.15 and not obj.get("_retry_done", False):
             strict_text = text + (
                 "\n\nOne-shot correction:\n"
-                "- Your last region covered more than 15% of the image, which violates the small-defect rule.\n"
+                "- Your last region covered more than 15% of the image, which violates the small-defect rule. A defect or an anomaly is a detail on Image B that is not present on Image A\n"
                 "- Re-analyze Image B and RETURN A NEW JSON with a much smaller, tighter region around the most salient defect.\n"
                 "- Keep coordinates normalized [0,1], top-left origin, y down. Use 3-6 positive points inside the smallest visible defect and 2-4 negatives tightly around it."
             )
@@ -691,16 +704,21 @@ def run_llm(
                             multimask_output=multimask
                         )
                         mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
+                    
+                    # FIX: keep bbox in the SAME orientation as pos_best/neg_best
+                    box_px = None
+                    if 'bbox' in region:
+                        x0, y0, x1, y1 = region['bbox']
+                        if use_yx:
+                            # LLM likely returned (y,x, y,x); swap back to (x,y) semantics
+                            x0, y0, x1, y1 = y0, x0, y1, x1
+                        box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
 
                     # optional box from positives; keeps your original behavior
                     if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
                         x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
                         pad = 0.05 * max(W, H)
                         box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
-
-                    if 'bbox' in region:
-                        x0, y0, x1, y1 = region['bbox']
-                        box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
 
                     # final predict using the resolved polarity/orientation/box
                     masks_final, scores_final, logits_final = sam_adapter.predict_region(
@@ -713,15 +731,7 @@ def run_llm(
                     rmask = (masks_final[kf].astype(np.uint8) * 255)
 
                     # build a FLOAT soft score map from logits for AUROC/AUPRO
-                    lg = np.array(logits_final[kf])
-                    if lg.ndim > 2:
-                        lg = lg.squeeze()
-                    prob = 1.0 / (1.0 + np.exp(-lg.astype(np.float32)))  # sigmoid on logits (float)
-                    if prob.shape != (H, W):
-                        # resize in FLOAT, never quantize before resize
-                        prob_img = Image.fromarray(prob.astype(np.float32), mode='F')
-                        prob_img = prob_img.resize((W, H), resample=Image.BILINEAR)
-                        prob = np.asarray(prob_img, dtype=np.float32)
+                    prob = logits_to_fullres_prob(logits_final[kf], H, W)
 
                     rpath = masks_root / f"{key}__r{r_idx}.png"
                     Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))

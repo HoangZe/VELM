@@ -43,7 +43,8 @@ class Sam2Adapter:
                 point_coords=coords if len(coords) else None,
                 point_labels=labels if len(coords) else None,
                 box=box_px.astype(np.float32) if box_px is not None else None,
-                multimask_output=multimask_output
+                multimask_output=multimask_output,
+                return_logits=True
             )
         # masks: (K,H,W) bool; scores: (K,)
         return masks, scores, logits

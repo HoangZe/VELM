@@ -15,8 +15,14 @@ logger = logging.getLogger(__name__)
 def make_localize_prompt(category: str, guidance_text: str) -> str:
     return (
         f"You are a visual anomaly inspector for '{category}'.\n"
-        "The first image (Image A) is a normal reference; the second image (Image B) is the query to analyze.\n\n"
-        "Domain guidance for this OBJECT contains the following descriptions for some of the possible anomalies to focus onto:\n"
+        "The first image (Image A) is a normal reference; the second image (Image B) is the query to analyze. An anomaly is a detail that is present in Image B but not in Image A, which indicates a defect.\n\n"
+        "Rules (must follow):\n"
+        "- For cases that there were no anomalies seen in Image B, return just an image-level label; For cases that anomalies were found on the query image B, return an image-level label, and sets of coordinates that represent positive points (which lie within and indicate the anomalous region) and negative points (which lie around the anomalous region to outline the anomaly for localization), and a bounding box which covers the entire region of points to localize the anomalous region to a tight bounding box.\n"
+        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH), with (0,0) at the TOP-LEFT, x increasing to the right and y increasing DOWNWARD.\n"
+        "- Provide 6 to 10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges).\n"
+        "- Provide 2 to 4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure.\n"
+        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02 to 0.03 of image size).\n"
+        "Domain guidance for this OBJECT contains the following descriptions for some of the possible anomalies to focus onto: \n"
         f"{guidance_text}\n\n"
         "If no anomaly in Image B, output exactly:\n"
         "{\"label\":\"normal\"}\n"
@@ -28,15 +34,7 @@ def make_localize_prompt(category: str, guidance_text: str) -> str:
         "    \"points_negative\": [{\"x\": 0.xx, \"y\": 0.yy}, ...],\n"
         "    \"bbox\": [x0, y0, x1, y1]\n"
         "  }],\n"
-        "  \"confidence\": 0.0-1.0\n"
         "}\n\n"
-        "Rules (must follow):\n"
-        "- There must be only 1 JSON in the response, the points_positive key should appear only ONCE in the response, the points_negative key should appear only ONCE in the response, and the bbox key should appear only ONCE in the response. The JSON keys must be exactly as specified, with no extra or missing keys.\n"
-        "- For cases that there were no anomalies seen in Image B, return just an image-level label; For cases that anomalies were found on the query image B, return an image-level label, and sets of coordinates that represent positive points (which lie within and indicate the anomalous region) and negative points (which lie around the anomalous region to outline the anomaly for localization), and a bounding box which covers the entire region of points to localize the anomalous region to a tight bounding box.\n"
-        "- Coordinates are normalized to [0,1] on Image B at its original resolution (WxH). with (0,0) at the TOP-LEFT, x increasing to the right and y increasing DOWNWARD.\n"
-        "- Provide 6 to 10 points_positive strictly INSIDE the anomalous region only (distribute across its area and edges).\n"
-        "- Provide 2 to 4 points_negative on the IMMEDIATELY ADJACENT intact area bordering the defect; these exclude the surrounding normal structure.\n"
-        "- Provide a TIGHT bbox that encloses ONLY the defect with a small margin (~0.02 to 0.03 of image size), NOT the entire object/opening.\n"
     )
 
 def _extract_text(v) -> str:

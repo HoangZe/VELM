@@ -23,14 +23,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def load_score_map(score_path: Path, target_hw: tuple[int,int]) -> np.ndarray:
-    """Load score map (.npy float32 or PNG fallback) and resize to target HxW in [0,1]."""
-    if score_path.suffix.lower() == ".npy":
-        s = np.load(score_path).astype(np.float32)
+def load_score_map(path: Path, target_hw: Optional[Tuple[int,int]]) -> np.ndarray:
+    # load as float32 in [0,1]
+    if path.suffix == '.npy':
+        s = np.load(path).astype(np.float32)
     else:
-        s = np.array(Image.open(score_path).convert("L"), dtype=np.float32) / 255.0
-    if s.shape != target_hw:
-        s = np.array(Image.fromarray((s*255).astype(np.uint8)).resize((target_hw[1], target_hw[0]), resample=Image.BILINEAR)) / 255.0
+        # fallback: PNG float or 8-bit
+        img = Image.open(path)
+        # 'F' will be inferred automatically for float images; convert if needed:
+        s = np.array(img.convert('F'), dtype=np.float32)
+        if s.max() > 1.0:  # normalize if it was 0..255
+            s /= 255.0
+    if target_hw and s.shape != target_hw:
+        try:
+            import torch
+            import torch.nn.functional as F
+            t = torch.from_numpy(s).unsqueeze(0).unsqueeze(0)  # 1x1xHxW
+            s = F.interpolate(t, size=target_hw, mode='bilinear', align_corners=False)[0,0].numpy()
+        except Exception:
+            from PIL.Image import Resampling
+            s = np.array(Image.fromarray(s).resize(
+                (target_hw[1], target_hw[0]), resample=Resampling.BILINEAR
+            ), dtype=np.float32)
     return np.clip(s, 0.0, 1.0)
 
 def auroc_from_scores(y_true: np.ndarray, y_score: np.ndarray) -> float:
