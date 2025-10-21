@@ -41,7 +41,7 @@ def build_anomaly_json_schema() -> dict:
             "points_negative": {"type": "array", "items": point},
             "bbox": bbox
         },
-        "required": ["points_positive", "bbox"],
+        "required": ["points_positive", "points_negative"],
         "additionalProperties": False
     }
     return {
@@ -435,8 +435,7 @@ def run_llm(
 
     For each entry in ``prompts_dict`` this function loads a reference
     image from the dataset (assumed to be in ``test/good``) and the query
-    image specified in the prompts dictionary.  It resizes both images to
-    ``image_size`` and passes them to the selected model backend along with
+    image specified in the prompts dictionary.  It passes the images to the selected model backend along with
     the prompt text.  The backend should return either ``anomalous`` or
     ``normal``.
 
@@ -531,7 +530,7 @@ def run_llm(
         # SAM-2 localization
         sam_adapter.set_image(query_img)
         H, W = query_img.height, query_img.width
-
+        
         region_masks = []
         region_scores = []  # soft score maps (for AUROC/AUPRO)
         region_paths = []
@@ -540,69 +539,67 @@ def run_llm(
             neg = region.get('points_negative', [])[:max_points]
             pos_px = np.array([[p['x']*W, p['y']*H] for p in pos], dtype=np.float32)
             neg_px = np.array([[p['x']*W, p['y']*H] for p in neg], dtype=np.float32) if neg else None
-
             box_px = None
+    
             def _coverage(mask_u8, pts):
-                if pts is None or len(pts) == 0: 
-                    return 0.0
+                if pts is None or len(pts) == 0: return 0.0
                 h, w = mask_u8.shape
                 ii = np.clip(np.round(pts[:, 1]).astype(int), 0, h-1)
                 jj = np.clip(np.round(pts[:, 0]).astype(int), 0, w-1)
                 return float(mask_u8[ii, jj].mean()) / 255.0
-
+    
             # try as-is (x,y)
-            masks, scores, _logits = sam_adapter.predict_region(
-                pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask
-            )
+            masks, scores, logits = sam_adapter.predict_region(pos_pts_px=pos_px, 
+                                                         neg_pts_px=neg_px, 
+                                                         box_px=box_px, 
+                                                         multimask_output=multimask)
             k = int(np.argmax(scores))
             mask_u8_xy = (masks[k].astype(np.uint8) * 255)
-
+    
             # try swapped (y,x) in case LLM returned row/col
             pos_yx = pos_px[:, [1, 0]]
             neg_yx = neg_px[:, [1, 0]] if neg_px is not None else None
-            masks2, scores2, _logits2 = sam_adapter.predict_region(
-                pos_pts_px=pos_yx, neg_pts_px=neg_yx, box_px=box_px, multimask_output=multimask
-            )
+            masks2, scores2, logits2 = sam_adapter.predict_region(pos_pts_px=pos_yx,
+                                                           neg_pts_px=neg_yx,
+                                                           box_px=box_px,
+                                                           multimask_output=multimask)
             k2 = int(np.argmax(scores2))
             mask_u8_yx = (masks2[k2].astype(np.uint8) * 255)
 
             # choose orientation by positive-vs-negative coverage
             def _score(mask, p, n):
                 return _coverage(mask, p) - 0.5*_coverage(mask, n)
-
-            score_xy = _score(mask_u8_xy, pos_px,  neg_px)
-            score_yx = _score(mask_u8_yx, pos_yx,  neg_yx)
-            use_yx   = score_yx > score_xy
-            mask_u8  = mask_u8_yx if use_yx else mask_u8_xy
+    
+            score_xy = _score(mask_u8_xy, pos_px, neg_px)
+            score_yx = _score(mask_u8_yx, pos_yx, neg_yx)
+            use_yx = score_yx > score_xy
+            mask_u8 = mask_u8_yx if use_yx else mask_u8_xy
             pos_best = pos_yx if use_yx else pos_px
             neg_best = neg_yx if use_yx else neg_px
-
+    
             # one-time polarity flip if negatives are covered more than positives
             if _coverage(mask_u8, pos_best) < _coverage(mask_u8, neg_best):
-                masks3, scores3, _logits3 = sam_adapter.predict_region(
+                masks3, scores3, logits3 = sam_adapter.predict_region(
                     pos_pts_px=neg_best if neg_best is not None else np.empty((0,2), np.float32),
                     neg_pts_px=pos_best,
                     box_px=box_px,
                     multimask_output=multimask
                 )
                 mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
-
-            # FIX: keep bbox in the SAME orientation as pos_best/neg_best
-            box_px = None
+            
             if 'bbox' in region:
                 x0, y0, x1, y1 = region['bbox']
                 if use_yx:
-                    # LLM likely returned (y,x, y,x); swap back to (x,y) semantics
                     x0, y0, x1, y1 = y0, x0, y1, x1
                 box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
-
-            # optional box from positives
+    
             if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
                 x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
                 pad = 0.05 * max(W, H)
                 box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
-
-            # final predict using the resolved polarity/orientation/box
+    
+    
+            # Predict using the resolved polarity
             masks_final, scores_final, logits_final = sam_adapter.predict_region(
                 pos_pts_px=pos_best if pos_best is not None else np.empty((0,2), np.float32),
                 neg_pts_px=neg_best,
@@ -610,23 +607,29 @@ def run_llm(
                 multimask_output=multimask,
             )
             kf = int(np.argmax(scores_final))
-            rmask = (masks_final[kf].astype(np.uint8) * 255)
-
-            # build a FLOAT soft score map from logits for AUROC/AUPRO
+    
+            # also get soft probability map
             prob = logits_to_fullres_prob(logits_final[kf], H, W)
-
-
+            rmask = (prob >= 0.5).astype(np.uint8) * 255
+    
             rpath = masks_root / f"{key}__r{r_idx}.png"
             Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
             region_masks.append(rmask)
+            region_scores.append(prob) #For AUROC/AUPRO
             region_paths.append(str(rpath))
-            region_scores.append(prob)  # AUROC/AUPRO soft map for this region
 
 
         final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
-        # one-shot correction if region area > 15% (total failure guard)
-        area_ratio = float((final_mask > 0).sum()) / float(H * W)
-        if obj.get("label") == "anomalous" and area_ratio > 0.15 and not obj.get("_retry_done", False):
+        #Calculate soft union mask for AUROC/AUPRO
+        soft_union = Sam2Adapter.union_scores(region_scores) if region_scores else np.zeros((H, W), np.float32)
+
+        # ONE-SHOT CORRECTION IF COVERAGE AREA >15%
+
+        # compute coverage two ways: hard (binary) and soft (low threshold)
+        hard_area = float(np.count_nonzero(final_mask)) / float(H * W)
+        soft_area = float(np.count_nonzero(soft_union >= 0.20)) / float(H * W)   # permissive to catch “bleed”
+        # ---- one-shot correction if either suggests a failure case ----
+        if (obj.get("label") == "anomalous") and (hard_area > 0.15 or soft_area > 0.15) and not obj.get("_retry_done", False):
             strict_text = text + (
                 "\n\nOne-shot correction:\n"
                 "- Your last region covered more than 15% of the image, which violates the small-defect rule. A defect or an anomaly is a detail on Image B that is not present on Image A\n"
@@ -648,8 +651,7 @@ def run_llm(
                     )(model, processor, [ref_img, query_img], strict_text)
                     obj = parse_llm_json(out[0])
                 obj["_retry_done"] = True  # avoid loops
-
-                # re-run the same region-processing code for obj['regions'] ---
+                
                 # clear and redo
                 region_masks, region_scores, region_paths = [], [], []
                 # re-enter the region loop 
@@ -658,69 +660,66 @@ def run_llm(
                     neg = region.get('points_negative', [])[:max_points]
                     pos_px = np.array([[p['x']*W, p['y']*H] for p in pos], dtype=np.float32)
                     neg_px = np.array([[p['x']*W, p['y']*H] for p in neg], dtype=np.float32) if neg else None
-
                     box_px = None
+    
                     def _coverage(mask_u8, pts):
-                        if pts is None or len(pts) == 0: 
-                            return 0.0
+                        if pts is None or len(pts) == 0: return 0.0
                         h, w = mask_u8.shape
                         ii = np.clip(np.round(pts[:, 1]).astype(int), 0, h-1)
                         jj = np.clip(np.round(pts[:, 0]).astype(int), 0, w-1)
                         return float(mask_u8[ii, jj].mean()) / 255.0
-
+    
                     # try as-is (x,y)
-                    masks, scores, _logits = sam_adapter.predict_region(
-                        pos_pts_px=pos_px, neg_pts_px=neg_px, box_px=box_px, multimask_output=multimask
-                    )
+                    masks, scores, logits = sam_adapter.predict_region(pos_pts_px=pos_px, 
+                                                         neg_pts_px=neg_px, 
+                                                         box_px=box_px, 
+                                                         multimask_output=multimask)
                     k = int(np.argmax(scores))
                     mask_u8_xy = (masks[k].astype(np.uint8) * 255)
-
+    
                     # try swapped (y,x) in case LLM returned row/col
                     pos_yx = pos_px[:, [1, 0]]
                     neg_yx = neg_px[:, [1, 0]] if neg_px is not None else None
-                    masks2, scores2, _logits2 = sam_adapter.predict_region(
-                        pos_pts_px=pos_yx, neg_pts_px=neg_yx, box_px=box_px, multimask_output=multimask
-                    )
+                    masks2, scores2, logits2 = sam_adapter.predict_region(pos_pts_px=pos_yx,
+                                                           neg_pts_px=neg_yx,
+                                                           box_px=box_px,
+                                                           multimask_output=multimask)
                     k2 = int(np.argmax(scores2))
                     mask_u8_yx = (masks2[k2].astype(np.uint8) * 255)
-
+    
                     # choose orientation by positive-vs-negative coverage
                     def _score(mask, p, n):
                         return _coverage(mask, p) - 0.5*_coverage(mask, n)
-
-                    score_xy = _score(mask_u8_xy, pos_px,  neg_px)
-                    score_yx = _score(mask_u8_yx, pos_yx,  neg_yx)
-                    use_yx   = score_yx > score_xy
-                    mask_u8  = mask_u8_yx if use_yx else mask_u8_xy
+    
+                    score_xy = _score(mask_u8_xy, pos_px, neg_px)
+                    score_yx = _score(mask_u8_yx, pos_yx, neg_yx)
+                    use_yx = score_yx > score_xy
+                    mask_u8 = mask_u8_yx if use_yx else mask_u8_xy
                     pos_best = pos_yx if use_yx else pos_px
                     neg_best = neg_yx if use_yx else neg_px
-
+    
                     # one-time polarity flip if negatives are covered more than positives
                     if _coverage(mask_u8, pos_best) < _coverage(mask_u8, neg_best):
-                        masks3, scores3, _logits3 = sam_adapter.predict_region(
+                        masks3, scores3, logits3 = sam_adapter.predict_region(
                             pos_pts_px=neg_best if neg_best is not None else np.empty((0,2), np.float32),
                             neg_pts_px=pos_best,
                             box_px=box_px,
                             multimask_output=multimask
                         )
                         mask_u8 = (masks3[int(np.argmax(scores3))].astype(np.uint8) * 255)
-                    
-                    # FIX: keep bbox in the SAME orientation as pos_best/neg_best
-                    box_px = None
+
                     if 'bbox' in region:
                         x0, y0, x1, y1 = region['bbox']
                         if use_yx:
-                            # LLM likely returned (y,x, y,x); swap back to (x,y) semantics
                             x0, y0, x1, y1 = y0, x0, y1, x1
                         box_px = np.array([x0*W, y0*H, x1*W, y1*H], dtype=np.float32)
-
-                    # optional box from positives; keeps your original behavior
+    
                     if (pos_best is not None) and len(pos_best) >= 2 and box_px is None:
                         x0, y0 = pos_best.min(axis=0); x1, y1 = pos_best.max(axis=0)
                         pad = 0.05 * max(W, H)
                         box_px = np.array([max(x0-pad,0), max(y0-pad,0), min(x1+pad,W-1), min(y1+pad,H-1)], dtype=np.float32)
-
-                    # final predict using the resolved polarity/orientation/box
+    
+                    # Predict using the resolved polarity
                     masks_final, scores_final, logits_final = sam_adapter.predict_region(
                         pos_pts_px=pos_best if pos_best is not None else np.empty((0,2), np.float32),
                         neg_pts_px=neg_best,
@@ -728,28 +727,24 @@ def run_llm(
                         multimask_output=multimask,
                     )
                     kf = int(np.argmax(scores_final))
-                    rmask = (masks_final[kf].astype(np.uint8) * 255)
-
-                    # build a FLOAT soft score map from logits for AUROC/AUPRO
+    
+                    # also get soft probability map
                     prob = logits_to_fullres_prob(logits_final[kf], H, W)
-
+                    rmask = (prob >= 0.5).astype(np.uint8) * 255
+    
                     rpath = masks_root / f"{key}__r{r_idx}.png"
                     Sam2Adapter.save_mask(rmask, rpath, hw_expected=(H, W))
                     region_masks.append(rmask)
+                    region_scores.append(prob) #For AUROC/AUPRO
                     region_paths.append(str(rpath))
-                    region_scores.append(prob)  # AUROC/AUPRO soft map for this region
 
                 final_mask = Sam2Adapter.union_masks(region_masks) if region_masks else np.zeros((H, W), np.uint8)
+                soft_union = Sam2Adapter.union_scores(region_scores) if region_scores else np.zeros((H, W), np.float32)
             except Exception as _:
                 pass  # fall back to the original mask if the retry fails
-        if region_scores:
-            union_score = region_scores[0]
-            for s in region_scores[1:]:
-                union_score = np.maximum(union_score, s)
-        else:
-            union_score = np.zeros((H, W), dtype=np.float32)
+        
         score_path = masks_root / f"{key}__score.npy"
-        np.save(score_path, union_score.astype(np.float32))
+        np.save(score_path, soft_union.astype(np.float32))
         top1_path = masks_root / f"{key}.png"
         Sam2Adapter.save_mask(final_mask, top1_path, hw_expected=(H, W))
         Sam2Adapter.save_overlay(query_img, final_mask, overlays_root / f"{key}.png")
@@ -807,10 +802,10 @@ def main():
     prompts_dict = load_json(json_file_path)
     # Initialise backend model/processor
     if args.model == 'qwen':
-        model = Qwen3VLMoeForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen3-VL-30B-A3B-Instruct", dtype="auto", device_map="auto"
+        model = Qwen3VLForConditionalGeneration.from_pretrained(
+            "Qwen/Qwen3-VL-8B-Instruct", dtype="auto", device_map="auto"
         )
-        processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-30B-A3B-Instruct")
+        processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-8B-Instruct")
     elif args.model == 'llama':
         hf_token = os.getenv("llama_access")
         model = MllamaForConditionalGeneration.from_pretrained(
