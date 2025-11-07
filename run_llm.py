@@ -630,10 +630,11 @@ def run_llm(
         soft_area = float(np.count_nonzero(soft_union >= 0.20)) / float(H * W)   # permissive to catch “bleed”
         # ---- one-shot correction if either suggests a failure case ----
         if (obj.get("label") == "anomalous") and (hard_area > 0.15 or soft_area > 0.15) and not obj.get("_retry_done", False):
+            print(f"[guard] {key} hard_area={hard_area:.3f} soft_area@0.20={soft_area:.3f} label={obj.get('label')}")
             strict_text = text + (
                 "\n\nOne-shot correction:\n"
                 "- Your last region covered more than 15% of the image, which violates the small-defect rule. A defect or an anomaly is a detail on Image B that is not present on Image A\n"
-                "- Re-analyze Image B and RETURN A NEW JSON with a much smaller, tighter region around the most salient defect.\n"
+                "- Re-analyze Image B and RETURN A NEW JSON with a much smaller, tighter, and narrower region around the most salient defect.\n"
                 "- Keep coordinates normalized [0,1], top-left origin, y down. Use 3-6 positive points inside the smallest visible defect and 2-4 negatives tightly around it."
             )
             try:

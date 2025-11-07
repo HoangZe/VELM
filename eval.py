@@ -57,15 +57,17 @@ def auroc_from_scores(y_true: np.ndarray, y_score: np.ndarray) -> float:
 
 def aupro_from_scores(y_true: np.ndarray, y_score: np.ndarray, fpr_cap: float = 0.3, steps: int = 101) -> float:
     """
-    Approximate AUPRO: threshold y_score ∈ [0,1] and integrate region-overlap (≈ recall)
-    up to an FPR cap (default 30%) as used in MVTec AD. See Bergmann et al. for PRO/AUPRO. 
+    Approximate AUPRO: threshold y_score ∈ [0,1] and integrate PRO (here ≈ pixel recall)
+    up to an FPR cap (default 30%). IMPORTANT: integrate with FPR in ascending order.
     """
     y_true = y_true.astype(np.uint8)
     y_score = np.clip(y_score.astype(np.float32), 0.0, 1.0)
-    H, W = y_true.shape
-    neg_count = (y_true == 0).sum()
-    if neg_count == 0:
+
+    neg_count = int((y_true == 0).sum())
+    pos_count = int((y_true == 1).sum())
+    if neg_count == 0 or pos_count == 0:
         return 0.0
+
     ts = np.linspace(0.0, 1.0, steps)
     fprs, pros = [], []
     for t in ts:
@@ -73,18 +75,41 @@ def aupro_from_scores(y_true: np.ndarray, y_score: np.ndarray, fpr_cap: float = 
         tp = int(((pred == 1) & (y_true == 1)).sum())
         fp = int(((pred == 1) & (y_true == 0)).sum())
         fn = int(((pred == 0) & (y_true == 1)).sum())
-        fpr = fp / float(neg_count + 1e-8)
-        # PRO ~= region-wise recall; we approximate by pixel recall when CC labeling isn't available.
-        # (Anomalib/MVTec define PRO & AUPRO in detail.) 
-        recall = tp / float(tp + fn + 1e-8)
-        fprs.append(fpr); pros.append(recall)
-    # integrate up to fpr_cap
-    fprs = np.array(fprs); pros = np.array(pros)
-    sel = fprs <= fpr_cap
-    if not np.any(sel):
-        return 0.0
-    # trapz on the clipped segment; normalize by cap to get [0,1]
-    return float(np.trapz(pros[sel], fprs[sel]) / max(fpr_cap, 1e-8))
+
+        fpr = fp / float(neg_count)
+        pro = tp / float(tp + fn + 1e-8)  # proxy for PRO (region-wise is recommended for “by-the-book” AUPRO)
+        fprs.append(fpr); pros.append(pro)
+
+    # Convert to numpy and sort by FPR ASC so integration is positive
+    fprs = np.asarray(fprs, dtype=np.float64)
+    pros = np.asarray(pros, dtype=np.float64)
+    idx = np.argsort(fprs)
+    fprs, pros = fprs[idx], pros[idx]
+
+    # Clip the curve to [0, fpr_cap] with linear interpolation at the cap
+    if fprs[0] > 0.0:
+        # prepend (0, pro_at_0) with pro at max threshold (usually near 0)
+        pros0 = pros[0]  # conservative
+        fprs = np.insert(fprs, 0, 0.0)
+        pros = np.insert(pros, 0, pros0)
+
+    if fprs[-1] < fpr_cap:
+        # append (fpr_cap, pro_at_last)
+        fprs = np.append(fprs, fpr_cap)
+        pros = np.append(pros, pros[-1])
+
+    # Interpolate to get samples strictly within [0, fpr_cap]
+    mask = (fprs <= fpr_cap)
+    f_sel = fprs[mask]
+    p_sel = pros[mask]
+    if f_sel[-1] < fpr_cap:
+        # one more point exactly at the cap
+        p_cap = np.interp(fpr_cap, fprs, pros)
+        f_sel = np.append(f_sel, fpr_cap)
+        p_sel = np.append(p_sel, p_cap)
+
+    area = float(np.trapezoid(p_sel, f_sel))  # x is increasing ⇒ area ≥ 0
+    return area / max(fpr_cap, 1e-8)
 
 class MetricsCalculator:
     """
@@ -115,6 +140,13 @@ class MetricsCalculator:
     def compute_confusion_matrix(self) -> np.ndarray:
         # Ensure consistent order of labels
         return confusion_matrix(self.gt_labels, self.pred_labels, labels=['normal', 'anomalous'])
+    def compute_auroc(self) -> float:
+        # Convert labels to binary
+        y_true = [1 if label == 'anomalous' else 0 for label in self.gt_labels]
+        y_pred = [1 if label == 'anomalous' else 0 for label in self.pred_labels]
+        if len(set(y_true)) < 2:
+            return 0.5  # edge case: only one class present
+        return float(roc_auc_score(y_true, y_pred))
 
     def compute_all_metrics(self) -> Dict[str, Union[float, List[List[int]]]]:
         return {
@@ -122,6 +154,7 @@ class MetricsCalculator:
             'precision': self.compute_precision(),
             'recall': self.compute_recall(),
             'f1': self.compute_f1(),
+            'auroc': self.compute_auroc(),
             'confusion_matrix': self.compute_confusion_matrix().tolist(),
         }
 
@@ -332,6 +365,10 @@ def evaluate_pixel_masks(
     cat_scores: Dict[str, List[np.ndarray]] = {}
     cat_gts: Dict[str, List[np.ndarray]] = {}
 
+    # NEW: global per-image lists for overall metrics
+    img_scores: List[np.ndarray] = []
+    img_gts: List[np.ndarray] = []
+
     for key, obj in preds.items():
         try:
             category, defect, img_id = parse_key_for_gt(key)
@@ -356,64 +393,94 @@ def evaluate_pixel_masks(
         if score_path and os.path.exists(score_path):
             score = load_score_map(Path(score_path), (H, W))
         else:
-            # fallback: use hard mask as a degenerate score (disfavored)
+            # fallback: hard mask as degenerate score (discouraged)
             score = load_binary_mask(Path(pred_mask_path), target_hw=gt.shape).astype(np.float32)
 
         cat_scores.setdefault(category, []).append(score)
         cat_gts.setdefault(category, []).append(gt.astype(np.uint8))
 
+        # collect for overall metrics
+        img_scores.append(score)
+        img_gts.append(gt.astype(np.uint8))
+
     per_category: Dict[str, Any] = {}
-    all_scores = []; all_gts = []
 
     for cat in sorted(cat_scores.keys()):
         if not cat_scores[cat]:
             continue
-        S = np.stack([s for s in cat_scores[cat]], axis=0)
-        G = np.stack([g for g in cat_gts[cat]], axis=0)
+        S = np.stack(cat_scores[cat], axis=0)
+        G = np.stack(cat_gts[cat], axis=0)
+
+        # AUROC (micro within the category)
         auroc = auroc_from_scores(G, S)
 
-        # AUPRO up to 30% FPR, averaged over images
-        aupros = []
-        for i in range(S.shape[0]):
-            aupros.append(aupro_from_scores(G[i], S[i], fpr_cap=0.30))
+        # AUPRO (macro per-image within the category)
+        aupros = [aupro_from_scores(G[i], S[i], fpr_cap=0.30) for i in range(S.shape[0])]
         aupro = float(np.mean(aupros)) if aupros else 0.0
 
-        # pixel-F1 at 0.5 threshold (simple, comparable)
+        # pixel-F1@0.5 (micro within the category)
         pred_bin = (S >= 0.5).astype(np.uint8)
         tp = int(((pred_bin == 1) & (G == 1)).sum())
         fp = int(((pred_bin == 1) & (G == 0)).sum())
         fn = int(((pred_bin == 0) & (G == 1)).sum())
         prec = float(tp) / (tp + fp) if (tp + fp) > 0 else 0.0
         rec  = float(tp) / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1   = (2*prec*rec)/(prec+rec) if (prec+rec) > 0 else 0.0
+        f1_05 = (2*prec*rec)/(prec+rec) if (prec+rec) > 0 else 0.0
+
+        # NEW: F1-max over thresholds (robust to calibration)
+        ths = np.linspace(0.0, 1.0, 101)
+        f1_vals = []
+        for th in ths:
+            pb = (S >= th).astype(np.uint8)
+            tp = int(((pb == 1) & (G == 1)).sum())
+            fp = int(((pb == 1) & (G == 0)).sum())
+            fn = int(((pb == 0) & (G == 1)).sum())
+            p = float(tp) / (tp + fp) if (tp + fp) > 0 else 0.0
+            r = float(tp) / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1_vals.append((2*p*r)/(p+r) if (p+r) > 0 else 0.0)
+        f1_max = float(np.max(f1_vals)) if len(f1_vals) else 0.0
 
         per_category[cat] = {
             'num_images': int(S.shape[0]),
             'AUROC': auroc,
             'AUPRO_30': aupro,
-            'pixel_F1@0.5': f1,
+            'pixel_F1@0.5': f1_05,
+            'pixel_F1_max': f1_max,
         }
 
-        all_scores.append(S.reshape(-1))
-        all_gts.append(G.reshape(-1))
+    # ----- overall (dataset-wide) -----
+    if img_scores:
+        # AUROC overall (micro): concatenate all pixels
+        S_all = np.concatenate([s.reshape(-1) for s in img_scores], axis=0)
+        G_all = np.concatenate([g.reshape(-1) for g in img_gts], axis=0)
+        overall_auroc = auroc_from_scores(G_all, S_all)
 
-    # overall (micro): concatenate all pixels
-    if all_scores:
-        S_all = np.concatenate(all_scores, axis=0)
-        G_all = np.concatenate(all_gts, axis=0)
-        overall = {
-            'AUROC': auroc_from_scores(G_all, S_all),
-            'AUPRO_30': aupro_from_scores(G_all, S_all, fpr_cap=0.30),
-            'pixel_F1@0.5': (lambda _S, _G: (
-                (lambda tp,fp,fn: ((2*(tp/(tp+fp))*(tp/(tp+fn))) /
-                                   (((tp/(tp+fp))+(tp/(tp+fn))) if ((tp+fp)>0 and (tp+fn)>0) else 1e9)
-                                   if ((tp+fp)>0 and (tp+fn)>0) else 0.0))
-            )(
-                int(((_S>=0.5) & (_G==1)).sum()),
-                int(((_S>=0.5) & (_G==0)).sum()),
-                int(((_S<0.5)  & (_G==1)).sum())
-            ))(S_all, G_all)
-        }
+        # AUPRO overall (macro): average per-image AUPROs
+        overall_aupro = float(np.mean([
+            aupro_from_scores(g, s, fpr_cap=0.30) for g, s in zip(img_gts, img_scores)
+        ]))
+
+        # Overall F1@0.5 and F1-max (micro)
+        tp = int(((S_all >= 0.5) & (G_all == 1)).sum())
+        fp = int(((S_all >= 0.5) & (G_all == 0)).sum())
+        fn = int(((S_all <  0.5) & (G_all == 1)).sum())
+        prec = float(tp) / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec  = float(tp) / (tp + fn) if (tp + fn) > 0 else 0.0
+        overall_f1 = (2*prec*rec)/(prec+rec) if (prec+rec) > 0 else 0.0
+
+        ths = np.linspace(0.0, 1.0, 101)
+        f1_vals = []
+        for th in ths:
+            tp = int(((S_all >= th) & (G_all == 1)).sum())
+            fp = int(((S_all >= th) & (G_all == 0)).sum())
+            fn = int(((S_all <  th) & (G_all == 1)).sum())
+            p = float(tp) / (tp + fp) if (tp + fp) > 0 else 0.0
+            r = float(tp) / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1_vals.append((2*p*r)/(p+r) if (p+r) > 0 else 0.0)
+        overall_f1_max = float(np.max(f1_vals)) if len(f1_vals) else 0.0
+
+        overall = {'AUROC': overall_auroc, 'AUPRO_30': overall_aupro,
+                   'pixel_F1@0.5': overall_f1, 'pixel_F1_max': overall_f1_max}
     else:
         overall = {'AUROC': 0.0, 'AUPRO_30': 0.0, 'pixel_F1@0.5': 0.0}
 
@@ -534,27 +601,31 @@ def main() -> None:
 
         results_to_save: Dict[str, Any] = {}
 
-        # --- image-level evaluation (existing path) ---
+        # --- image-level evaluation ---
         if args.eval_mode in ('image', 'both'):
             img_all: Dict[str, Any] = {}
             for category in object_categories:
                 logger.info(f"[image] Evaluating category: {category}")
                 img_all[category] = evaluate_predictions(predictions_path, category)
+            
             # overall (micro-avg across cats)
             accuracies = [res['accuracy'] for res in img_all.values()]
             precisions = [res['precision'] for res in img_all.values()]
             recalls = [res['recall'] for res in img_all.values()]
             f1s = [res['f1'] for res in img_all.values()]
+            aurocs = [res['auroc'] for res in img_all.values() if 'auroc' in res]
+            
             img_overall = {
                 'accuracy': float(np.mean(accuracies)) if accuracies else 0.0,
                 'precision': float(np.mean(precisions)) if precisions else 0.0,
                 'recall': float(np.mean(recalls)) if recalls else 0.0,
                 'f1': float(np.mean(f1s)) if f1s else 0.0,
+                'auroc': float(np.mean(aurocs)) if aurocs else 0.0,
             }
             img_all['overall'] = img_overall
             results_to_save['image_level'] = img_all
 
-        # --- pixel-level evaluation (new) ---
+        # --- pixel-level evaluation ---
         if args.eval_mode in ('pixel', 'both'):
             data_root = Path(args.data_root) if args.data_root else None
             logger.info("[pixel] Evaluating pixel-level masks")
