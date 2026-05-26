@@ -1,203 +1,110 @@
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-classification-on-mvtecad)](https://paperswithcode.com/sota/anomaly-classification-on-mvtecad?p=detect-classify-act-categorizing-industrial)
+# Visual Anomaly Detection using Multimodal Large Models
 
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-classification-on-mvtec-ac)](https://paperswithcode.com/sota/anomaly-classification-on-mvtec-ac?p=detect-classify-act-categorizing-industrial)
+This repository implements the code-based pipeline used in "Visual Anomaly Detection using Multimodal Large Models". It pairs a visual segmentor (SAM-2) with multimodal LLMs to detect and localize anomalies in industrial images.
 
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-classification-on-visa-ac)](https://paperswithcode.com/sota/anomaly-classification-on-visa-ac?p=detect-classify-act-categorizing-industrial)
+What the code does:
+- Generate category-specific structured prompts (reference + query + guidance) using `generate_prompts.py`.
+- Query a multimodal HF model (`qwen`, `llama`, `llava`, `gemma`) with the images + prompt and request a strict JSON answer describing label + localization points/bbox.
+- Convert LLM-provided points to pixel masks using a SAM-2 adapter (`sam_adapter.py`), save overlays and soft score maps, and optionally retry when predicted regions are implausibly large.
+- Compute image-level and pixel-level evaluation metrics with `eval.py` using saved predictions and SAM outputs.
 
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/detect-classify-act-categorizing-industrial/anomaly-severity-classification-anomaly-vs)](https://paperswithcode.com/sota/anomaly-severity-classification-anomaly-vs?p=detect-classify-act-categorizing-industrial)
+Repository layout (relevant files):
 
-# VELM (Vision Expert + Language Model): A framework for Anomaly Classification (AC)
+- `generate_prompts.py` — create prompts and save to `configs/prompts/{dataset}_prompts.json`.
+- `run_llm.py` — main inference pipeline (HF multimodal models + SAM-2 integration).
+- `eval.py` — image- and pixel-level evaluation utilities.
+- `sam_adapter.py` — wrapper around SAM-2 to predict masks from points/boxes.
+- `utils.py` — I/O, JSON parsing (robust LLM repairs), config helpers.
+- `configs/` — prompts, predictions, evaluations, contour config.
+- `datasets/` — expected dataset roots (not included).
 
-Repository provides the source code for the paper "Detect, Classify, Act: Categorizing Industrial Anomalies with Multi-Modal Large Language Models":
+Quick setup
+-----------
 
-### [arXiv](https://arxiv.org/abs/2505.02626) | [Video](https://youtu.be/mfKS1d3kOdc) | [Poster](https://docs.google.com/presentation/d/1VLDDxsHh8oXfJH_cY2bRDJERIh0bBEGUornfIgjpADU/edit?usp=sharing)
+1) Create a Python 3.9 environment (conda recommended) and install requirements:
 
-![teaser](figures/framework.jpg)
-
-## Overview
-
-The project supports multiple LLM backends including GPT-4o, GPT-4o-mini, and Qwen2-VL. VELM enables anomaly classification by leveraging the visual understanding capabilities of multimodal LLMs. The system can:
-
-- Process images of industrial objects
-- Detect and localize anomalies using a vision expert
-- Generate red line contour based on anomaly localization
-- Classify different types of anomaly 
-- Distinguish between negligible anomalies and critical defects
-- Evaluate model performance using various metrics
-
-## Repository Structure
-
-```
-VELM/
-├── configs/                  # Configuration files
-│   ├── prompts/              # Preprocessed prompts for different datasets
-│   ├── predictions/          # Model predictions
-|   ├── evaluations/          # Evaluation results
-│   ├── mvtec_ad_des.json     # MVTec-AD dataset descriptions
-│   ├── mvtec_ac_des.json     # MVTec-AC dataset descriptions
-│   └── visa_ac_des.json      # VisA-AC dataset descriptions
-├── datasets/                 # Datasets (download links are provided)
-│   ├── mvtec_ad              # MVTec-AD dataset
-│   ├── mvtec_ac              # MVTec-AC dataset
-│   └── visa_ac               # VisA-AC dataset
-├── utils.py                  # Common utility functions
-├── ddad_reorganizer.py       # Match the output of DDAD to the expected directory structure
-├── create_contour.py         # Script to draw contour lines on the query image based on detected anomalies
-├── generate_prompts.py       # Script to preprocess prompts
-├── run_llm_hm.py             # Script to run LLM models with heatmap visualization
-├── eval.py                   # Script to evaluate model predictions
-└── anomaly_vs_defect.py      # Script to evaluate negligible anomaly vs. critical defect classification
-```
-
-## Installation
-
-1. Clone the repository:
 ```bash
-git clone https://github.com/Sassanmtr/VELM.git
-cd VELM
-```
-
-2. Install dependencies:
-```bash
-conda create --name velm_env python=3.9
+conda create -n velm_env python=3.9 -y
 conda activate velm_env
 pip install -r requirements.txt
 ```
 
-3. (For experiments with GPT) Set up environment variables:
-Create a `.env` file in the root directory with your API keys:
-```
-OPENAI_API_KEY=your_openai_api_key
-```
-
-## Datasets
-
-The framework supports the following datasets:
-
-- **MVTec-AD**: A dataset for unsupervised anomaly detection
-- **MVTec-AC**: A dataset for anomaly classification
-- **VisA-AC**: A dataset for anomaly classification
-
-### Download and Setup Instructions
-
-- [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) Download and place in the `datasets/mvtec_ad` folder  
-- [MVTec-AC](https://drive.google.com/drive/folders/1R_rZgZbHEF9byic84zdlWezECtmUk4na?usp=sharing) Download and place in the `datasets/mvtec_ac` folder
-
-**Note:** MVTec-AC uses the same training set as MVTec-AD. You can copy the train folder from mvtec_ad to mvtec_ac if needed
-
-
-- [VisA-AC](https://drive.google.com/drive/folders/1cpF_yJD0cOIQoyx1egf1V4sGfvMpLTLn?usp=sharing) Download and place in the `datasets/visa_ac` folder
-
- **Note:** VisA-AC uses the same training set as VisA. If VisA is already downloaded, you can reuse its train folder.
- 
-
-## Usage
-
-### Create Contour Images
-Generate red contour lines from heatmaps to overlay on test images:
+2) (Optional) Set a Hugging Face token if required by model checkpoints:
 
 ```bash
-python create_contour.py --dataset mvtec_ac --image_size 448
+export llama_access=hf_xxx_your_token
 ```
-Options:
-- `--config`: Path to YAML configuration file (default: `configs/contour_config.yaml`)
-- `--dataset`: Dataset to use (mvtec_ad, mvtec_ac, visa_ac)-overrides config
-- `image_size`: Resize inout images and heatmaps to this size (default: 448)
 
-**Note:** To use heatmaps generated by other methods, update the `heatmap_dir` path in the configuration file accordingly
+3) Place datasets under `datasets/` (see the dataset section). Optionally populate `configs/*` with description JSONs.
 
-### Generating Prompts
+Data layout expected
+-------------------
 
-Generate prompts for the LLM to perform anomaly classification:
+For MVTec/VisA style datasets the code expects:
+
+- Images: `datasets/<dataset>/<category>/test/<defect>/<image>.png`
+- Ground-truth masks: `datasets/<dataset>/<category>/ground_truth/<defect>/<image>_mask.png`
+
+Supported dataset keys used by scripts: `mvtec_ad`, `mvtec_ac`, `visa_ac`.
+
+generate_prompts.py
+-------------------
+
+Purpose: iterate test folders and write a JSON mapping of sample keys to `{image, text}` where `text` is a strict instruction prompt used by the LLM. If `configs/*_des.json` exists it will be used to inject category-specific guidance.
+
+Usage:
 
 ```bash
-python generate_prompts.py --dataset mvtec_ac --text_type conditioned --ddad_format True
+python generate_prompts.py --dataset mvtec_ac --descriptions_path configs/mvtec_ac_des.json
 ```
 
-Options:
-- `--dataset`: Dataset to use (mvtec_ad, mvtec_ac, visa_ac)
-- `--text_type`: Type of text to generate (raw: reference and query images, conditioned: reference, contour, and query images)
-- `--ddad_format`: Whether to use DDAD format (True/False)
+Outputs: `configs/prompts/{dataset}_prompts.json`.
 
-### Running LLM Models
+run_llm.py
+----------
 
-Run LLM models for anomaly detection with heatmap visualization:
+Purpose: run a multimodal HF model per prompt, parse the structured JSON output, and call SAM-2 to generate masks/overlays and soft score maps.
+
+Key details discovered in the code:
+- Supported backends (`--model`): `qwen`, `llama`, `llava`, `gemma` (loaded via `transformers.from_pretrained`).
+- JSON enforcement options (`--json_enforce`): `none`, `tools`, `guided`. `guided` uses `lm-format-enforcer` when available; `tools` requests a tool call from the model; `none` uses the legacy repair parser in `utils.parse_llm_json`.
+- When `task=localize` (default), the pipeline uses `Sam2Adapter` to produce masks and score maps, saved under `configs/masks/{dataset}/{model}/` and `configs/overlays/{dataset}/{model}/`.
+- If the unioned predicted mask covers >15% of the image (hard or soft), the pipeline issues a one-shot correction and re-queries the LLM with stricter instructions.
+
+Typical command:
 
 ```bash
-# Using GPT-4o (default)
-python run_llm.py --model gpt --dataset mvtec_ad --heatmap_mode contour
-
-# Using GPT-4o-mini
-python run_llm.py --model gpt --gpt_model gpt-4o-mini --dataset mvtec_ad --heatmap_mode contour
-
-# Using Qwen2-VL
-python run_llm.py --model qwen --dataset mvtec_ac --heatmap_mode contour
+python run_llm.py --model qwen --dataset mvtec_ac --num_ref 1 --task localize --json_enforce guided
 ```
 
-Options:
-- `--model`: Model to use (gpt, qwen)
-- `--gpt_model`: GPT model to use (gpt-4o, gpt-4o-mini) - only applicable if model=gpt
-- `--dataset`: Dataset to use (mvtec_ad, mvtec_ac, visa_ac)
-- `--heatmap_mode`: Heatmap visualization mode (contour, none)
-- `--image_size`: Size to resize images to (default: 448)
-- `--num_ref`: Number of reference images to use (default: 1)
+Outputs:
 
-### Evaluating Model Performance
+- `configs/predictions/{dataset}_binary_preds_{model}.json` — predictions JSON.
+- `configs/masks/{dataset}/{model}/*` — saved masks and `*__score.npy` soft maps.
+- `configs/overlays/{dataset}/{model}/*` — image overlays.
 
-Evaluate model predictions:
+Notes:
+- HF model downloads require disk space and possibly a HF token. Large models may need GPUs to run efficiently.
+- If `lm-format-enforcer` is missing, guided decoding will raise; `run_llm.py` will fall back to legacy parsing where possible.
+
+eval.py
+-------
+
+Purpose: compute image-level and pixel-level metrics from saved predictions and SAM outputs.
+
+Capabilities:
+- Image-level: accuracy, precision, recall, F1, AUROC (per-category and averaged).
+- Pixel-level: AUROC, AUPRO@30% (per-image averaged), pixel-F1@0.5 and F1-max across thresholds.
+
+Usage example:
 
 ```bash
-python eval.py --dataset mvtec_ad --model gpt-4o --heatmap_mode contour
+python eval.py --dataset mvtec_ac --model qwen --eval_mode both --output configs/evaluations/mvtec_ac_qwen_eval.json
 ```
 
-Options:
-- `--dataset`: Dataset to evaluate (mvtec_ad, mvtec_ac, visa_ac)
-- `--model`: Model type used for predictions (gpt-4o, gpt-4o-mini, qwen)
-- `--heatmap_mode`: Heatmap visualization mode (contour, none)
-- `--output`: Path to save evaluation results (optional)
-- `--verbose`: Enable verbose logging
+Developer notes
+---------------
 
-### Anomaly vs. Defect Classification
-
-Evaluate model performance in distinguishing between critical defects and negligible anomalies:
-
-```bash
-python anomaly_vs_defect.py --dataset mvtec_ad --model gpt-4o --heatmap_mode contour
-```
-
-Options:
-- `--dataset`: Dataset to evaluate (mvtec_ad, mvtec_ac, visa_ac)
-- `--model`: Model type used for predictions (gpt-4o, gpt-4o-mini, qwen)
-- `--heatmap_mode`: Heatmap visualization mode (contour, none)
-- `--seeds`: Number of random seeds to use for evaluation (default: 5)
-- `--output`: Path to save evaluation results (default: anom_def_results.json)
-- `--verbose`: Enable verbose logging
-
-
-## Results
-
-Evaluation results are saved in JSON format and include:
-
-- Accuracy per object category
-- Standard deviation of accuracy
-- Overall accuracy metrics
-- Confusion matrices
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Citation
-
-```
-@article{mokhtar2025detect,
-  title={Detect, Classify, Act: Categorizing Industrial Anomalies with Multi-Modal Large Language Models},
-  author={Mokhtar, Sassan and Mousakhan, Arian and Galesso, Silvio and Tayyub, Jawad and Brox, Thomas},
-  journal={arXiv preprint arXiv:2505.02626},
-  year={2025}
-}
-```
-
-## Feedback
-
-For any feedback or inquiries, please contact sassan.mtr@gmail.com
+- `utils.parse_llm_json` implements robust repairs for common LLM output issues (fences, trailing commas, misplaced brackets, orphan numerics) and raises clear errors when JSON is invalid.
+- `sam_adapter.py` wraps a SAM-2 HF predictor (`facebook/sam2.1-hiera-large` by default).
+- `run_llm.py` tries multiple decoding/enforcement strategies and falls back to legacy parsing when necessary; it's designed to be defensive when interacting with LLMs.
